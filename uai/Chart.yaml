@@ -1,0 +1,36 @@
+apiVersion: v2
+name: uai
+description: UAI — Urumi MCP Gateway Platform on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+dependencies:
+  - name: mariadb
+    version: 0.1.0
+    repository: "file://charts/mariadb"
+    condition: mariadb.enabled
+  - name: woocommerce
+    version: 0.1.0
+    repository: "file://charts/woocommerce"
+    condition: woocommerce.enabled
+  - name: postgres
+    version: 0.1.0
+    repository: "file://charts/postgres"
+    condition: postgres.enabled
+  - name: woo-mcp
+    version: 0.1.0
+    repository: "file://charts/woo-mcp"
+    condition: woo-mcp.enabled
+  - name: gateway
+    version: 0.1.0
+    repository: "file://charts/gateway"
+    condition: gateway.enabled
+  - name: dashboard
+    version: 0.1.0
+    repository: "file://charts/dashboard"
+    condition: dashboard.enabled
+  - name: demo-mcp-servers
+    version: 0.1.0
+    repository: "file://charts/demo-mcp-servers"
+    condition: demo-mcp-servers.enabled

@@ -1,0 +1,7 @@
+# Local development overrides (kind + ingress-nginx)
+# Usage: helm install uai ./uai -f ./uai/values-local.yaml -n uai --create-namespace
+
+ingress:
+  className: nginx
+  storeDomain: store.localtest.me
+  appDomain: app.localtest.me

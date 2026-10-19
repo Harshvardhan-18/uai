@@ -1,0 +1,35 @@
+# UAI Platform — Default values
+# Override with values-local.yaml or values-prod.yaml
+
+ingress:
+  enabled: true
+  className: nginx
+  storeDomain: store.localtest.me
+  appDomain: app.localtest.me
+  annotations: {}
+
+# ── Subchart toggles ──
+mariadb:
+  enabled: true
+
+woocommerce:
+  enabled: true
+
+postgres:
+  enabled: true
+
+woo-mcp:
+  enabled: true
+
+gateway:
+  enabled: true
+
+dashboard:
+  enabled: true
+
+demo-mcp-servers:
+  enabled: true
+
+networkPolicies:
+  enabled: true
+

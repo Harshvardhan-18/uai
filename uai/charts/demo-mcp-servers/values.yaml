@@ -1,0 +1,29 @@
+enabled: true
+
+utils:
+  image:
+    repository: uai-utils-mcp
+    tag: latest
+    pullPolicy: IfNotPresent
+  port: 8001
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+everything:
+  image:
+    repository: uai-everything-mcp
+    tag: latest
+    pullPolicy: IfNotPresent
+  port: 8002
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi

@@ -1,0 +1,24 @@
+enabled: true
+
+image:
+  repository: uai-gateway
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+env:
+  encryptionKey: "REDACTED_ENCRYPTION_KEY"
+  jwtSecret: "REDACTED_JWT_SECRET"
+  adminEmail: "admin@localtest.me"
+  adminPassword: "REDACTED_ADMIN_PASS"

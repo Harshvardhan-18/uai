@@ -1,0 +1,9 @@
+# Production overrides (k3s + Traefik on VPS)
+# Usage: helm install uai ./uai -f ./uai/values-prod.yaml -n uai --create-namespace
+
+ingress:
+  className: traefik
+  storeDomain: store.example.com   # Replace with real domain
+  appDomain: app.example.com       # Replace with real domain
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod

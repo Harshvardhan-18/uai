@@ -1,0 +1,42 @@
+enabled: true
+
+image:
+  repository: wordpress
+  tag: "php8.2-apache"
+  pullPolicy: IfNotPresent
+
+cliImage:
+  repository: wordpress
+  tag: "cli"
+  pullPolicy: IfNotPresent
+
+site:
+  url: "http://store.localtest.me"
+  title: "UAI Store"
+  adminUser: "admin"
+  adminPassword: "REDACTED_ADMIN_PASS"
+  adminEmail: "admin@localtest.me"
+
+credentials:
+  consumerKey: "REDACTED_WOO_CONSUMER_KEY"
+  consumerSecret: "REDACTED_WOO_CONSUMER_SECRET"
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+cliResources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+persistence:
+  size: 2Gi
+  storageClass: ""

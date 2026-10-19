@@ -1,0 +1,1 @@
+{{/* WooCommerce templates — populated in Phase 2 */}}

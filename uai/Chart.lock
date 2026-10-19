@@ -1,0 +1,24 @@
+dependencies:
+- name: mariadb
+  repository: file://charts/mariadb
+  version: 0.1.0
+- name: woocommerce
+  repository: file://charts/woocommerce
+  version: 0.1.0
+- name: postgres
+  repository: file://charts/postgres
+  version: 0.1.0
+- name: woo-mcp
+  repository: file://charts/woo-mcp
+  version: 0.1.0
+- name: gateway
+  repository: file://charts/gateway
+  version: 0.1.0
+- name: dashboard
+  repository: file://charts/dashboard
+  version: 0.1.0
+- name: demo-mcp-servers
+  repository: file://charts/demo-mcp-servers
+  version: 0.1.0
+digest: sha256:b15868a2d5e76447637147c177cfa908140622c87208072d1c00550d9c804744
+generated: "2026-10-19T11:26:02.7398492+05:30"

@@ -1,0 +1,212 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-woocommerce-bootstrap-{{ randAlphaNum 5 | lower }}
+  labels:
+    app.kubernetes.io/name: woocommerce-bootstrap
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: woocommerce-bootstrap
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.cliImage.repository }}:{{ .Values.cliImage.tag }}"
+          imagePullPolicy: {{ .Values.cliImage.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.cliResources | nindent 12 }}
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: "{{ .Release.Name }}-mariadb:3306"
+            - name: WORDPRESS_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-mariadb
+                  key: database
+            - name: WORDPRESS_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-mariadb
+                  key: username
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-mariadb
+                  key: password
+            - name: SITE_URL
+              value: {{ .Values.site.url | quote }}
+            - name: SITE_TITLE
+              value: {{ .Values.site.title | quote }}
+            - name: ADMIN_USER
+              value: {{ .Values.site.adminUser | quote }}
+            - name: ADMIN_PASSWORD
+              value: {{ .Values.site.adminPassword | quote }}
+            - name: ADMIN_EMAIL
+              value: {{ .Values.site.adminEmail | quote }}
+            - name: WOO_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-woo-credentials
+                  key: consumer-key
+            - name: WOO_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-woo-credentials
+                  key: consumer-secret
+          volumeMounts:
+            - name: wp-data
+              mountPath: /var/www/html
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=== Starting WooCommerce Automated Bootstrap ==="
+
+              # 1. Wait for MariaDB to be accessible
+              DB_HOST="${WORDPRESS_DB_HOST%%:*}"
+              echo "Waiting for MariaDB at $DB_HOST..."
+              until mariadb-admin ping -h "$DB_HOST" -u "$WORDPRESS_DB_USER" -p"$WORDPRESS_DB_PASSWORD" --skip-ssl --silent; do
+                echo "MariaDB unavailable, retrying in 3s..."
+                sleep 3
+              done
+              echo "MariaDB is ready!"
+
+              cd /var/www/html
+
+              # 2. Wait for WordPress core files if WordPress deployment is copying them
+              echo "Checking WordPress core files..."
+              count=0
+              while [ ! -f index.php ] && [ $count -lt 30 ]; do
+                echo "Waiting for WordPress files to appear in /var/www/html ($count/30)..."
+                sleep 2
+                count=$((count + 1))
+              done
+
+              if [ ! -f index.php ]; then
+                echo "Downloading WordPress core..."
+                wp core download --skip-content
+              fi
+
+              # 3. Create wp-config.php if missing
+              if [ ! -f wp-config.php ]; then
+                echo "Creating wp-config.php..."
+                wp config create \
+                  --dbhost="$WORDPRESS_DB_HOST" \
+                  --dbname="$WORDPRESS_DB_NAME" \
+                  --dbuser="$WORDPRESS_DB_USER" \
+                  --dbpass="$WORDPRESS_DB_PASSWORD" \
+                  --extra-php="define('FS_METHOD', 'direct'); define('WP_HOME', '$SITE_URL'); define('WP_SITEURL', '$SITE_URL'); \$_SERVER['HTTPS'] = 'on';"
+              fi
+
+              # 4. Install WordPress core if not installed
+              if ! wp core is-installed; then
+                echo "Installing WordPress core..."
+                wp core install \
+                  --url="$SITE_URL" \
+                  --title="$SITE_TITLE" \
+                  --admin_user="$ADMIN_USER" \
+                  --admin_password="$ADMIN_PASSWORD" \
+                  --admin_email="$ADMIN_EMAIL" \
+                  --skip-email
+              else
+                echo "WordPress core is already installed."
+              fi
+
+              # 5. Install & Activate WooCommerce
+              if ! wp plugin is-installed woocommerce; then
+                echo "Installing WooCommerce plugin..."
+                wp plugin install woocommerce --activate
+              else
+                echo "Activating WooCommerce plugin..."
+                wp plugin activate woocommerce || true
+              fi
+
+              # 6. Configure pretty permalinks (required for WooCommerce REST API v3)
+              echo "Configuring permalink structure..."
+              wp rewrite structure '/%postname%/' --hard
+
+              # 7. Enable COD (Cash on Delivery) payment gateway
+              echo "Enabling COD payment gateway..."
+              wp eval "
+              update_option('woocommerce_cod_settings', array(
+                  'enabled' => 'yes',
+                  'title' => 'Cash on Delivery',
+                  'description' => 'Pay with cash upon delivery.',
+                  'instructions' => 'Pay with cash upon delivery.',
+                  'enable_for_virtual' => 'yes'
+              ));
+              update_option('woocommerce_currency', 'USD');
+              if (function_exists('wc_create_pages')) {
+                  wc_create_pages();
+              }
+              "
+
+              # 8. Create WooCommerce REST API Key for MCP Gateway
+              echo "Configuring WooCommerce REST API Key..."
+              wp eval '
+              global $wpdb;
+              $key = getenv("WOO_CONSUMER_KEY");
+              $secret = getenv("WOO_CONSUMER_SECRET");
+              $hash = hash_hmac("sha256", $key, "wc-api");
+              $wpdb->replace(
+                  $wpdb->prefix . "woocommerce_api_keys",
+                  array(
+                      "key_id"          => 1,
+                      "user_id"         => 1,
+                      "description"     => "UAI MCP Gateway Key",
+                      "permissions"     => "read_write",
+                      "consumer_key"    => $hash,
+                      "consumer_secret" => $secret,
+                      "truncated_key"   => substr($key, -7),
+                  ),
+                  array("%d", "%d", "%s", "%s", "%s", "%s", "%s")
+              );
+              echo "API key created successfully!\n";
+              '
+
+              # 9. Seed demo products if none exist
+              echo "Checking demo products..."
+              wp eval '
+              $products = wc_get_products(array("limit" => 1));
+              if (empty($products)) {
+                  $p1 = new WC_Product_Simple();
+                  $p1->set_name("Ergonomic Mechanical Keyboard");
+                  $p1->set_regular_price(149);
+                  $p1->set_description("High performance mechanical keyboard with custom switches.");
+                  $p1->set_status("publish");
+                  $p1->save();
+
+                  $p2 = new WC_Product_Simple();
+                  $p2->set_name("Wireless Noise-Canceling Headphones");
+                  $p2->set_regular_price(299);
+                  $p2->set_description("Premium wireless audio with active noise cancellation.");
+                  $p2->set_status("publish");
+                  $p2->save();
+                  echo "Sample products created successfully!\n";
+              } else {
+                  echo "Products already exist.\n";
+              }
+              '
+
+              echo "=== WooCommerce Automated Bootstrap Complete! ==="
+      volumes:
+        - name: wp-data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-woocommerce-pvc

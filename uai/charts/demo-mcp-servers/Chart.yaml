@@ -1,0 +1,6 @@
+apiVersion: v2
+name: demo-mcp-servers
+description: Demo upstream MCP servers (utils-mcp + everything-mcp)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

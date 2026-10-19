@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-everything-mcp
+  labels:
+    app.kubernetes.io/name: everything-mcp
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.everything.port }}
+      targetPort: {{ .Values.everything.port }}
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: everything-mcp
+    app.kubernetes.io/instance: {{ .Release.Name }}

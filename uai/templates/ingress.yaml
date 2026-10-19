@@ -1,0 +1,58 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "uai.fullname" . }}-ingress
+  labels:
+    {{- include "uai.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    # ── WooCommerce store ──
+    - host: {{ .Values.ingress.storeDomain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "uai.fullname" . }}-woocommerce
+                port:
+                  number: 80
+    # ── Dashboard + Gateway API ──
+    - host: {{ .Values.ingress.appDomain }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "uai.fullname" . }}-gateway
+                port:
+                  number: 3000
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "uai.fullname" . }}-gateway
+                port:
+                  number: 3000
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "uai.fullname" . }}-gateway
+                port:
+                  number: 3000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "uai.fullname" . }}-dashboard
+                port:
+                  number: 80
+{{- end }}
