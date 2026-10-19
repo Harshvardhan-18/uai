@@ -41,13 +41,6 @@ spec:
                 name: {{ include "uai.fullname" . }}-gateway
                 port:
                   number: 3000
-          - path: /metrics
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "uai.fullname" . }}-gateway
-                port:
-                  number: 3000
           - path: /
             pathType: Prefix
             backend:

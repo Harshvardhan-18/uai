@@ -2,10 +2,11 @@ import express, { Request, Response } from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { config } from "./config.js";
 import { initDb, pool } from "./db/index.js";
 import { sha256 } from "./crypto/encryption.js";
-import { verifyJwt } from "./auth/auth-service.js";
+import { verifyJwt, authenticateRequest, requireAdmin } from "./auth/auth-service.js";
 import { createGatewayMcpServer } from "./mcp/gateway-server.js";
 import { healthChecker } from "./upstream/health-checker.js";
 import { authRouter } from "./api/auth-routes.js";
@@ -48,8 +49,8 @@ const handleMetrics = async (_req: Request, res: Response) => {
     res.status(500).send(`# Error generating metrics: ${err.message}\n`);
   }
 };
-app.get("/metrics", handleMetrics);
-app.get("/api/metrics", handleMetrics);
+// ── Metrics Endpoint (Admin authenticated on external API) ──
+app.get("/api/metrics", authenticateRequest, requireAdmin, handleMetrics);
 
 // ── Mount REST APIs ──
 app.use("/api/auth", authRouter);
@@ -106,31 +107,44 @@ async function authenticateMcpClient(req: Request): Promise<User | null> {
   return null;
 }
 
-// Handlers for both /mcp and /mcp/sse
-const handleMcpSse = async (req: Request, res: Response): Promise<void> => {
+// Handlers for both modern Streamable HTTP and legacy SSE
+const handleMcp = async (req: Request, res: Response): Promise<void> => {
   const user = await authenticateMcpClient(req);
   if (!user) {
     res.status(401).json({ error: "Unauthorized: Valid API key (Bearer gw_...) or session required." });
     return;
   }
 
-  console.log(`[mcp] New client session connected for user: ${user.email}`);
+  // Distinguish legacy SSE (GET with text/event-stream only) from modern Streamable HTTP
+  const isLegacySse =
+    req.method === "GET" &&
+    req.headers.accept?.includes("text/event-stream") &&
+    !req.headers.accept?.includes("application/json");
 
-  // Create aggregated MCP server for this user session
+  if (!isLegacySse) {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    const gatewayServer = await createGatewayMcpServer(user);
+    await gatewayServer.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    return;
+  }
+
+  // Fallback to legacy SSEServerTransport
+  console.log(`[mcp] New legacy SSE client session connected for user: ${user.email}`);
   const gatewayServer = await createGatewayMcpServer(user);
   const transport = new SSEServerTransport("/mcp/messages", res);
   transports.set(transport.sessionId, transport);
 
   req.on("close", () => {
-    console.log(`[mcp] Session closed: ${transport.sessionId} (${user.email})`);
+    console.log(`[mcp] Legacy SSE Session closed: ${transport.sessionId} (${user.email})`);
     transports.delete(transport.sessionId);
   });
 
   await gatewayServer.connect(transport);
 };
 
-app.get("/mcp", handleMcpSse);
-app.get("/mcp/sse", handleMcpSse);
+app.all("/mcp", handleMcp);
+app.get("/mcp/sse", handleMcp);
 
 app.post("/mcp/messages", async (req: Request, res: Response): Promise<void> => {
   const sessionId = req.query.sessionId as string;
@@ -154,11 +168,19 @@ async function start() {
     await initDb();
     healthChecker.start();
 
+    // Internal Prometheus metrics exporter on dedicated port 9090
+    const metricsApp = express();
+    metricsApp.get("/metrics", handleMetrics);
+    metricsApp.listen(9090, "0.0.0.0", () => {
+      console.log("Internal Prometheus metrics listening on port 9090");
+    });
+
     app.listen(config.port, "0.0.0.0", () => {
       console.log(`===============================================`);
       console.log(`UAI Gateway listening on port ${config.port}`);
-      console.log(`MCP Endpoint:   http://0.0.0.0:${config.port}/mcp`);
+      console.log(`MCP Endpoint:   http://0.0.0.0:${config.port}/mcp (Streamable HTTP + SSE)`);
       console.log(`REST APIs:      http://0.0.0.0:${config.port}/api/*`);
+      console.log(`Internal Metr:  http://0.0.0.0:9090/metrics`);
       console.log(`Health Check:   http://0.0.0.0:${config.port}/health`);
       console.log(`===============================================`);
     });

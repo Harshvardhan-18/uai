@@ -124,7 +124,36 @@ When an incoming JSON-RPC `tools/call` arrives:
 
 ---
 
-## 4. Local vs Production Parity
+## 4. Failure Handling & Resilience
+
+The gateway implements a multi-layer resilience architecture ensuring that failures in one upstream server never degrade tool discovery or call performance for other servers.
+
+### 4.1 Parallel Discovery via `Promise.allSettled`
+When discovering tools across upstreams, the gateway queries all enabled servers concurrently using `Promise.allSettled`. If any upstream times out, crashes, or is undergoing a rolling update, `Promise.allSettled` guarantees that successful responses from healthy upstreams are preserved and aggregated without throwing unhandled rejections.
+
+### 4.2 Strict Per-Upstream Timeouts
+- **Tool Listing (`upstreamTimeoutList`)**: 5,000ms. If an upstream fails to return its tool schemas within 5 seconds, discovery for that upstream is aborted with an error log, while remaining upstreams complete without delay.
+- **Tool Call Execution (`upstreamTimeoutCall`)**: 30,000ms. If a long-running upstream operation exceeds 30s, the gateway aborts the call and returns a structured MCP error (`[Gateway Error] Calling <tool> timed out after 30000ms`) with `isError: true`, freeing connections and preventing cascading pool exhaustion.
+
+### 4.3 In-Memory Schema Cache with TTL
+Aggregated tool schemas are cached in an in-memory TTL cache (`toolCacheTtlMs = 30000ms`). During temporary upstream outages or pod restarts:
+- Incoming `tools/list` requests are served from the warm cache in <15ms.
+- External MCP clients and autonomous chat agents experience uninterrupted availability.
+
+### 4.4 Automated Background Health Checks
+A background health check loop runs periodically (`healthCheckIntervalMs = 30000ms`):
+- Probes `/health` on each registered upstream with `redirect: 'error'` and connection-time SSRF validation.
+- Updates Postgres columns: `health_status` (`Connected`, `Unreachable`, `Disabled`) and `health_error` (e.g. `fetch failed: connect ECONNREFUSED`).
+- When a pod recovers and passes health checks, status automatically transitions back to `Connected` with `health_error` cleared.
+
+### 4.5 Dead-Upstream Fault Isolation
+- When an upstream server is dead or scaled to 0 replicas:
+  - Calls to other servers (`woo__list_orders`, `everything__echo`) continue to succeed without latency degradation or error.
+  - Calls targeting the dead upstream fail gracefully with an isolated error message without crashing the gateway.
+
+---
+
+## 5. Local vs Production Parity
 
 The platform is designed to run identically on local development clusters (kind) and production environments (k3s VPS), differing only through Helm values (`values-local.yaml` vs `values-prod.yaml`).
 

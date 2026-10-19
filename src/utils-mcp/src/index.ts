@@ -1,6 +1,7 @@
 import express, { Request, Response } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
 const PORT = parseInt(process.env.PORT || "8001", 10);
@@ -133,10 +134,27 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // Tool 4: slow_operation (intentionally slow tool to test timeout behavior)
+  server.tool(
+    "slow_operation",
+    "Simulates a long-running upstream operation that delays response by specified seconds.",
+    {
+      delay_seconds: z.number().optional().default(35).describe("Delay duration in seconds"),
+    },
+    async ({ delay_seconds }: any) => {
+      const delay = Number(delay_seconds) || 35;
+      await new Promise((r) => setTimeout(r, delay * 1000));
+      return {
+        content: [{ type: "text", text: `Completed after ${delay}s delay.` }],
+      };
+    }
+  );
+
   return server;
 }
 
 const app = express();
+app.use(express.json());
 
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
@@ -145,6 +163,14 @@ app.get("/health", (_req: Request, res: Response) => {
     version: "0.1.0",
     timestamp: new Date().toISOString(),
   });
+});
+
+// Streamable HTTP endpoint (stateless)
+app.all("/mcp", async (req: Request, res: Response) => {
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const mcpServer = createMcpServer();
+  await mcpServer.connect(transport);
+  await transport.handleRequest(req, res, req.body);
 });
 
 const transports = new Map<string, SSEServerTransport>();

@@ -117,17 +117,17 @@ export async function initDb(): Promise<void> {
       {
         name: "WooCommerce Store",
         slug: "woo",
-        url: "http://uai-woo-mcp:8000/sse",
+        url: "http://uai-woo-mcp:8000/mcp",
       },
       {
         name: "Utility Tools",
         slug: "utils",
-        url: "http://uai-utils-mcp:8001/sse",
+        url: "http://uai-utils-mcp:8001/mcp",
       },
       {
         name: "Everything Demo",
         slug: "everything",
-        url: "http://uai-everything-mcp:8002/sse",
+        url: "http://uai-everything-mcp:8002/mcp",
       },
     ];
 
@@ -142,6 +142,9 @@ export async function initDb(): Promise<void> {
         console.log(`[db] Seeded initial upstream server: ${s.name} (${s.slug})`);
       }
     }
+
+    // Migrate any legacy /sse URLs to modern Streamable HTTP /mcp
+    await client.query(`UPDATE servers SET url = REPLACE(url, '/sse', '/mcp') WHERE url LIKE '%/sse'`);
 
     await client.query("COMMIT");
     console.log("[db] Database schema initialized successfully.");

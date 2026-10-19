@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Lock, Mail, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
+import { Shield, Lock, Mail, ArrowRight, AlertCircle } from 'lucide-react';
 import { User } from '../types';
 
 interface LoginViewProps {
@@ -30,12 +30,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onLogin })
     } finally {
       setLoading(false);
     }
-  };
-
-  const fillAdmin = () => {
-    setEmail('admin@localtest.me');
-    setPassword('REDACTED_ADMIN_PASS');
-    setError(null);
   };
 
   return (
@@ -115,22 +109,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onLogin })
               )}
             </button>
           </form>
-
-          {/* Demo Auto-fill Helper */}
-          <div className="mt-6 pt-6 border-t border-slate-100">
-            <p className="text-xs text-slate-500 font-medium mb-3 flex items-center">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500 mr-1.5" />
-              Quick Demo Fill:
-            </p>
-            <button
-              type="button"
-              onClick={fillAdmin}
-              className="w-full py-2 px-3 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 text-left flex items-center justify-between transition-colors"
-            >
-              <span>Seed Admin (<span className="font-mono text-indigo-600">admin@localtest.me</span>)</span>
-              <span className="text-[10px] bg-slate-200 px-1.5 py-0.5 rounded text-slate-600">Click to fill</span>
-            </button>
-          </div>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import express, { Request, Response } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { WooCommerceClient } from "./woo-client.js";
 
@@ -237,6 +238,7 @@ function createMcpServer(): McpServer {
 
 // Start Express HTTP Server
 const app = express();
+app.use(express.json());
 
 // Health check endpoint for Kubernetes liveness & readiness probes
 app.get("/health", (_req: Request, res: Response) => {
@@ -247,6 +249,14 @@ app.get("/health", (_req: Request, res: Response) => {
     wooUrl: WOO_URL,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Streamable HTTP endpoint (stateless)
+app.all("/mcp", async (req: Request, res: Response) => {
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const mcpServer = createMcpServer();
+  await mcpServer.connect(transport);
+  await transport.handleRequest(req, res, req.body);
 });
 
 // Map of active SSE transports by sessionId

@@ -153,9 +153,11 @@ async function main() {
   // Check 3: Observability & Prometheus Metrics
   // ──────────────────────────────────────────────────────────────────
   console.log("--- Check 3: Observability & Prometheus Metrics ---");
-  const metricsRes = await fetch(`${BASE_URL}/metrics`);
+  const metricsRes = await fetch(`${BASE_URL}/api/metrics`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
   if (!metricsRes.ok) {
-    throw new Error(`Failed to fetch /metrics: HTTP ${metricsRes.status}`);
+    throw new Error(`Failed to fetch /api/metrics: HTTP ${metricsRes.status}`);
   }
   const metricsText = await metricsRes.text();
 

@@ -1,0 +1,19 @@
+=======================================================================
+  UAI - Urumi AI Platform Deployed Successfully!
+=======================================================================
+
+Storefront URL:  http://{{ .Values.ingress.storeDomain }}
+Dashboard URL:   http://{{ .Values.ingress.appDomain }}
+MCP Endpoint:    http://{{ .Values.ingress.appDomain }}/mcp
+
+Retrieve generated Admin Credentials:
+-------------------------------------
+Admin Email:
+  kubectl get secret -n {{ .Release.Namespace }} {{ .Release.Name }}-gateway -o jsonpath="{.data.admin-email}" | base64 -d; echo
+
+Admin Password:
+  kubectl get secret -n {{ .Release.Namespace }} {{ .Release.Name }}-gateway -o jsonpath="{.data.admin-password}" | base64 -d; echo
+
+Encryption Key:
+  kubectl get secret -n {{ .Release.Namespace }} {{ .Release.Name }}-gateway -o jsonpath="{.data.encryption-key}" | base64 -d; echo
+=======================================================================

@@ -1,13 +1,15 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { pool } from "../db/index.js";
 import { decrypt } from "../crypto/encryption.js";
 import { config } from "../config.js";
 import { AggregatedTool, UpstreamServer } from "../types/index.js";
+import { validateUpstreamUrl } from "../crypto/ssrf-guard.js";
 
 interface ActiveConnection {
   client: Client;
-  transport: SSEClientTransport;
+  transport: any;
   server: UpstreamServer;
 }
 
@@ -49,6 +51,12 @@ export class UpstreamPool {
       return existing.client;
     }
 
+    // Connection-time SSRF re-validation
+    const ssrfCheck = await validateUpstreamUrl(server.url);
+    if (!ssrfCheck.valid) {
+      throw new Error(`SSRF blocked connection to ${server.name} (${server.url}): ${ssrfCheck.reason}`);
+    }
+
     // Build custom headers if authentication configured
     const requestHeaders: Record<string, string> = {};
     if (server.auth_type === "bearer" && server.auth_token_encrypted) {
@@ -60,16 +68,26 @@ export class UpstreamPool {
     }
 
     const url = new URL(server.url);
-    const transport = new SSEClientTransport(url, {
-      eventSourceInit: {
-        // Headers passed during SSE connection
-        headers: requestHeaders,
-      } as any,
-      requestInit: {
-        // Headers passed during POST messages
-        headers: requestHeaders,
-      },
-    });
+    let transport: any;
+
+    if (server.url.includes("/mcp") || !server.url.includes("/sse")) {
+      transport = new StreamableHTTPClientTransport(url, {
+        requestInit: {
+          headers: requestHeaders,
+          redirect: "error", // B8: Prevent open redirect SSRF bypasses
+        },
+      });
+    } else {
+      transport = new SSEClientTransport(url, {
+        eventSourceInit: {
+          headers: requestHeaders,
+        } as any,
+        requestInit: {
+          headers: requestHeaders,
+          redirect: "error", // B8: Prevent open redirect SSRF bypasses
+        },
+      });
+    }
 
     const client = new Client(
       {

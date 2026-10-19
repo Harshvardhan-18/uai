@@ -95,7 +95,7 @@ async function main() {
     body: JSON.stringify({
       name: "Temporary Audit Upstream",
       slug: demoSlug,
-      url: "http://demo-temp:9999/sse",
+      url: "http://uai-demo-temp:9999/mcp",
       auth_type: "bearer",
       auth_token: "secret-token-do-not-leak",
     }),

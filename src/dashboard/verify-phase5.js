@@ -78,7 +78,7 @@ async function main() {
     body: JSON.stringify({
       name: "Temporary Demo Upstream",
       slug: testSlug,
-      url: "http://demo-service:9000/sse",
+      url: "http://uai-temp-demo:9000/mcp",
       auth_type: "bearer",
       auth_token: "super-secret-vault-token-xyz987",
     }),

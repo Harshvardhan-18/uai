@@ -46,7 +46,7 @@ serverRouter.post("/", requireAdmin, async (req: AuthenticatedRequest, res: Resp
   }
 
   // SSRF Protection
-  const ssrfCheck = validateUpstreamUrl(url);
+  const ssrfCheck = await validateUpstreamUrl(url);
   if (!ssrfCheck.valid) {
     res.status(400).json({ error: `SSRF validation failed: ${ssrfCheck.reason}` });
     return;
@@ -100,7 +100,7 @@ serverRouter.put("/:id", requireAdmin, async (req: AuthenticatedRequest, res: Re
 
     // SSRF Check if URL is being updated
     if (url) {
-      const ssrfCheck = validateUpstreamUrl(url);
+      const ssrfCheck = await validateUpstreamUrl(url);
       if (!ssrfCheck.valid) {
         res.status(400).json({ error: `SSRF validation failed: ${ssrfCheck.reason}` });
         return;
@@ -171,3 +171,20 @@ serverRouter.delete("/:id", requireAdmin, async (req: AuthenticatedRequest, res:
     res.status(500).json({ error: `Failed to delete server: ${err.message}` });
   }
 });
+
+// 7. POST /api/servers/check-health - Trigger immediate health check across all upstreams
+serverRouter.post("/check-health", requireAdmin, async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await healthChecker.checkAll();
+    const result = await pool.query<UpstreamServer>(`
+      SELECT id, name, slug, url, auth_type, auth_header_name, enabled,
+             health_status, health_error, last_health_check, created_at, updated_at
+      FROM servers
+      ORDER BY id ASC
+    `);
+    res.json({ servers: result.rows });
+  } catch (err: any) {
+    res.status(500).json({ error: `Failed to trigger health check: ${err.message}` });
+  }
+});
+

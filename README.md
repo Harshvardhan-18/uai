@@ -96,14 +96,35 @@ helm install uai ./uai -f ./uai/values-local.yaml -n uai --create-namespace
 
 ## Service Endpoints & Access
 
-| Component | URL | Notes |
+| **Component** | **URL** | **Notes** |
 |---|---|---|
 | **WooCommerce Storefront** | [http://store.localtest.me](http://store.localtest.me) | Pre-seeded with catalog products and COD checkout |
-| **WordPress Admin** | [http://store.localtest.me/wp-login.php](http://store.localtest.me/wp-login.php) | User: `admin` / Password: `REDACTED_ADMIN_PASS` |
-| **UAI Dashboard** | [http://app.localtest.me](http://app.localtest.me) | Admin: `admin@localtest.me` / Password: `REDACTED_ADMIN_PASS` |
+| **WordPress Admin** | [http://store.localtest.me/wp-login.php](http://store.localtest.me/wp-login.php) | User: `admin` / Password: see Secrets Retrieval below |
+| **UAI Dashboard** | [http://app.localtest.me](http://app.localtest.me) | Admin: `admin@localtest.me` / Password: see Secrets Retrieval below |
 | **Gateway REST API** | [http://app.localtest.me/api](http://app.localtest.me/api) | Protected by JWT session cookie or Bearer tokens |
-| **Gateway Streamable MCP** | [http://app.localtest.me/mcp](http://app.localtest.me/mcp) | Authenticate with Bearer API Key (`gw_...`) |
-| **Prometheus Metrics** | [http://app.localtest.me/metrics](http://app.localtest.me/metrics) | Real-time Prometheus metrics exporter (tool counts, latency, upstreams) |
+| **Gateway Streamable MCP** | [http://app.localtest.me/mcp](http://app.localtest.me/mcp) | Modern Streamable HTTP endpoint (`Bearer gw_...`) |
+| **Prometheus Metrics** | Internal port `9090` / Admin `/api/metrics` | Prometheus metrics exporter (unauthenticated public /metrics removed) |
+
+### Secrets Retrieval
+Retrieve dynamically generated credentials from the Kubernetes Secret:
+```bash
+# Admin Email
+kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-email}" | base64 -d; echo
+
+# Admin Password
+kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-password}" | base64 -d; echo
+```
+
+---
+
+## How to Place an Order
+To test the full WooCommerce order lifecycle and external MCP order queries:
+1. **Browse Storefront**: Open [http://store.localtest.me](http://store.localtest.me) in your browser.
+2. **Add Products to Cart**: Select any product (e.g. *Premium Quality Hoodie*) and click **Add to cart**.
+3. **Navigate to Checkout**: Click the cart or go directly to [http://store.localtest.me/checkout](http://store.localtest.me/checkout).
+4. **Complete Checkout (Cash on Delivery)**: Enter demo billing details (e.g. John Doe, demo street, city). Select **Cash on delivery (COD)** as the payment method to bypass payment gateways, and click **Place order**.
+5. **Confirm in WP-Admin**: Log into [http://store.localtest.me/wp-login.php](http://store.localtest.me/wp-login.php) with the admin credentials. Go to **WooCommerce -> Orders** to see the new order in `processing` status.
+6. **Query via MCP**: Query orders via an external MCP client (`woo__list_orders`) or ask the dashboard AI chat agent (*"What orders were placed today?"*).
 
 ---
 

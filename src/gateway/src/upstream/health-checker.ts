@@ -1,6 +1,7 @@
 import { pool } from "../db/index.js";
 import { config } from "../config.js";
 import { UpstreamServer } from "../types/index.js";
+import { validateUpstreamUrl } from "../crypto/ssrf-guard.js";
 
 export class HealthChecker {
   private timer: NodeJS.Timeout | null = null;
@@ -27,8 +28,14 @@ export class HealthChecker {
     try {
       // Determine health check URL (e.g. replace /sse with /health, or test GET /sse)
       let testUrl = server.url;
-      if (testUrl.endsWith("/sse")) {
-        testUrl = testUrl.replace(/\/sse$/, "/health");
+      if (testUrl.endsWith("/sse") || testUrl.endsWith("/mcp")) {
+        testUrl = testUrl.replace(/\/(sse|mcp)$/, "/health");
+      }
+
+      // Connection-time SSRF validation
+      const ssrfCheck = await validateUpstreamUrl(testUrl);
+      if (!ssrfCheck.valid) {
+        return { status: "Unreachable", error: `SSRF blocked: ${ssrfCheck.reason}` };
       }
 
       const controller = new AbortController();
@@ -38,6 +45,7 @@ export class HealthChecker {
         const res = await fetch(testUrl, {
           signal: controller.signal,
           headers: { Accept: "application/json, text/plain, */*" },
+          redirect: "error", // B8: Prevent open redirect SSRF bypasses
         });
 
         if (res.ok) {
