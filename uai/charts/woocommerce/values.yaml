@@ -13,13 +13,14 @@ cliImage:
 site:
   url: "http://store.localtest.me"
   title: "UAI Store"
+  timezone: "UTC"
   adminUser: "admin"
-  adminPassword: "REDACTED_ADMIN_PASS"
+  adminPassword: ""
   adminEmail: "admin@localtest.me"
 
 credentials:
-  consumerKey: "REDACTED_WOO_CONSUMER_KEY"
-  consumerSecret: "REDACTED_WOO_CONSUMER_SECRET"
+  consumerKey: ""
+  consumerSecret: ""
 
 resources:
   requests:

@@ -1,12 +1,15 @@
 import { User } from "../types/index.js";
 import { upstreamPool } from "../upstream/client-pool.js";
 import { recordAudit } from "../mcp/gateway-server.js";
-import { getLLMProvider, ChatMessage, ToolDefinition } from "./llm-provider.js";
+import { getLLMProvider, SmartIntentProvider, ChatMessage, ToolDefinition } from "./llm-provider.js";
 import { config } from "../config.js";
 import { canUserAccessTool, getAccessDeniedMessage } from "../auth/permissions.js";
 
 export interface AgentEvent {
-  type: "thought" | "tool_call_start" | "tool_call_end" | "delta" | "done" | "error";
+  type: "meta" | "thought" | "tool_call_start" | "tool_call_end" | "delta" | "done" | "error";
+  provider?: string;
+  model?: string;
+  isFallback?: boolean;
   content?: string;
   tool?: string;
   args?: any;
@@ -87,12 +90,21 @@ export async function runAgentLoop(options: {
     parameters: t.inputSchema || { type: "object", properties: {} },
   }));
 
-  // 2. Build conversation context
+  // 2. Build conversation context with explicit Date and Time injection (Item 2)
+  const now = new Date();
+  const isoDate = now.toISOString().split("T")[0];
+  const isoStartOfDay = `${isoDate}T00:00:00Z`;
+  const isoEndOfDay = `${isoDate}T23:59:59Z`;
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
   const systemPrompt = `You are the UAI Assistant, an intelligent operational assistant connected to WooCommerce and internal utility services on Kubernetes.
+Current timestamp: ${now.toISOString()} (${timezone}).
+Today's date is: ${isoDate}.
+Today's full-day window is after: "${isoStartOfDay}" and before: "${isoEndOfDay}".
 You have access to ${tools.length} live tools through the UAI MCP Gateway.
-Always use appropriate tools when user asks to query or modify store data (e.g. creating products, fetching orders, currency conversion).
-When user asks for products or orders, call the woo tools.
+When user asks for "today's orders" or "orders that came in today", ALWAYS supply the "after" parameter (set to start of today: "${isoStartOfDay}") and optionally "before" to woo__list_orders so orders from previous days are excluded.
 When user asks to convert currencies, call utils__convert_currency.
+If the user asks to get today's orders and convert the total to another currency (e.g. EUR), first call woo__list_orders to find the orders and their total, then after receiving the result, call utils__convert_currency with the total amount.
 Keep responses concise, clear, and professional.`;
 
   const messages: ChatMessage[] = [
@@ -101,7 +113,16 @@ Keep responses concise, clear, and professional.`;
     { role: "user", content: message },
   ];
 
-  const provider = getLLMProvider();
+  let provider = getLLMProvider();
+  const isFallback = provider.name === "smart-intent-fallback";
+
+  onEvent({
+    type: "meta",
+    provider: provider.name,
+    model: provider.model || (isFallback ? "smart-intent-fallback" : "default"),
+    isFallback,
+  });
+
   let step = 0;
   let finalResponse = "";
 
@@ -110,10 +131,23 @@ Keep responses concise, clear, and professional.`;
 
     onEvent({
       type: "thought",
-      content: step === 1 ? `Analyzing request with ${provider.name}...` : `Processing tool output (Step ${step})...`,
+      content: step === 1 ? `Analyzing request with ${provider.name} (${provider.model || "default"})...` : `Processing tool output (Step ${step})...`,
     });
 
-    const response = await provider.chat(messages, tools);
+    let response;
+    try {
+      response = await provider.chat(messages, tools);
+    } catch (err: any) {
+      console.warn(`[agent] ${provider.name} failed: ${err.message}. Gracefully engaging smart-intent-fallback.`);
+      provider = new SmartIntentProvider();
+      onEvent({
+        type: "meta",
+        provider: provider.name,
+        model: "smart-intent-fallback",
+        isFallback: true,
+      });
+      response = await provider.chat(messages, tools);
+    }
 
     // If no tool calls requested, we have reached the final answer
     if (!response.tool_calls || response.tool_calls.length === 0) {
@@ -173,6 +207,12 @@ Keep responses concise, clear, and professional.`;
     onEvent({ type: "delta", content: finalResponse });
   }
 
-  onEvent({ type: "done", content: finalResponse });
+  onEvent({
+    type: "done",
+    content: finalResponse,
+    provider: provider.name,
+    model: provider.model || (provider.name === "smart-intent-fallback" ? "smart-intent-fallback" : "default"),
+    isFallback: provider.name === "smart-intent-fallback",
+  });
   return finalResponse;
 }

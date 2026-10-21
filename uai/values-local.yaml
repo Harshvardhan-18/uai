@@ -5,3 +5,10 @@ ingress:
   className: nginx
   storeDomain: store.localtest.me
   appDomain: app.localtest.me
+
+gateway:
+  env:
+    llmProvider: "groq"
+    llmModel: "openai/gpt-oss-120b"
+    healthCheckIntervalMs: 10000
+

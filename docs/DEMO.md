@@ -41,7 +41,7 @@ This script provides a step-by-step walkthrough for recording a live demo or pre
 
 ### Part 3: UAI Dashboard & Server Health (Browser)
 1. **Open**: `http://app.localtest.me` in your browser.
-2. **Sign in**: Click the **Quick Demo Fill** button (`admin@localtest.me` / `REDACTED_ADMIN_PASS`).
+2. **Sign in**: Sign in with `admin@localtest.me` and the admin password retrieved from the cluster Secret (printed in Helm `NOTES.txt` or via `kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-password}" | base64 -d`).
 3. **Show**:
    - **Upstream Servers tab**: All 3 servers show `Connected` (green pulse badge).
    - Click **"View Tools"** on `WooCommerce Store` to show the 5 tools and expand the JSON Schema preview.

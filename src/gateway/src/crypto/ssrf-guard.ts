@@ -3,29 +3,49 @@ import dns from "dns";
 import { config } from "../config.js";
 
 /**
- * Check if a hostname matches the in-cluster service allowlist
+ * Check if a URL matches the strict in-cluster host:port allowlist
  */
-function isAllowedInClusterHost(hostname: string): boolean {
-  const allowedPatterns = config.inClusterAllowlist
+function isAllowedInCluster(parsed: URL): boolean {
+  const hostname = parsed.hostname.toLowerCase();
+  const effectivePort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const hostPort = `${hostname}:${effectivePort}`;
+
+  const allowedEntries = config.inClusterAllowlist
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 
-  for (const pattern of allowedPatterns) {
-    if (pattern.startsWith("*.")) {
-      const suffix = pattern.substring(1); // e.g. .svc.cluster.local
-      if (hostname.endsWith(suffix)) return true;
-    } else if (hostname === pattern) {
-      return true;
-    }
-  }
+  return allowedEntries.includes(hostPort);
+}
 
-  // Also allow standard same-namespace Kubernetes short service names (letters, digits, dashes)
-  if (/^[a-z0-9-]+$/.test(hostname) && (hostname.startsWith("uai-") || hostname.endsWith("-mcp"))) {
-    return true;
-  }
+/**
+ * Map low-level transport errors to specific root cause messages
+ */
+export function mapTransportError(err: any): string {
+  if (!err) return "Unknown error";
+  const msg = (err.message || "").toLowerCase();
+  const causeMsg = (err.cause?.message || "").toLowerCase();
+  const code = (err.code || err.cause?.code || "").toLowerCase();
 
-  return false;
+  if (err.name === "AbortError" || msg.includes("aborted") || msg.includes("timed out") || code === "etimedout") {
+    return "Connection timed out (upstream exceeded timeout threshold)";
+  }
+  if (code === "econnrefused" || msg.includes("econnrefused") || causeMsg.includes("econnrefused")) {
+    return "Connection refused (upstream pod down or port not listening)";
+  }
+  if (code === "enotfound" || code === "eai_again" || msg.includes("enotfound") || causeMsg.includes("enotfound")) {
+    return "DNS resolution failed (host does not exist)";
+  }
+  if (msg.includes("certificate") || msg.includes("tls") || msg.includes("ssl") || code.includes("cert")) {
+    return "TLS/SSL certificate validation failed";
+  }
+  if (msg.includes("ssrf blocked") || msg.includes("ssrf validation failed")) {
+    return err.message;
+  }
+  if (msg.includes("redirect") || causeMsg.includes("redirect") || msg.includes("maximum redirects")) {
+    return "HTTP redirect blocked (redirects not permitted on upstream connections)";
+  }
+  return err.message || "Connection failed";
 }
 
 /**
@@ -72,12 +92,17 @@ export async function validateUpstreamUrl(urlString: string): Promise<{ valid: b
   }
 
   // 5. Block direct Kubernetes control plane access
-  if (hostname === "kubernetes" || hostname === "kubernetes.default" || hostname === "kubernetes.default.svc") {
+  if (
+    hostname === "kubernetes" ||
+    hostname === "kubernetes.default" ||
+    hostname === "kubernetes.default.svc" ||
+    hostname === "kubernetes.default.svc.cluster.local"
+  ) {
     return { valid: false, reason: "Forbidden destination: Direct access to Kubernetes API is blocked." };
   }
 
-  // 6. Check if host is an allowed in-cluster service
-  if (isAllowedInClusterHost(hostname)) {
+  // 6. Check strict in-cluster host:port allowlist
+  if (isAllowedInCluster(parsed)) {
     return { valid: true };
   }
 

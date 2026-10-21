@@ -58,7 +58,12 @@ spec:
                 define('FS_METHOD', 'direct');
                 define('WP_HOME', '{{ .Values.site.url }}');
                 define('WP_SITEURL', '{{ .Values.site.url }}');
-                $_SERVER['HTTPS'] = 'on';
+                if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) {
+                  $_SERVER['HTTPS'] = 'on';
+                }
+                if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/wp-json') !== false) {
+                  $_SERVER['HTTPS'] = 'on';
+                }
           ports:
             - name: http
               containerPort: 80

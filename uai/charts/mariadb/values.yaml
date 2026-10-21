@@ -8,8 +8,8 @@ image:
 auth:
   database: wordpress
   username: wp_user
-  password: "REDACTED_MARIADB_PASS"
-  rootPassword: "REDACTED_ROOT_PASS"
+  password: ""
+  rootPassword: ""
 
 resources:
   requests:

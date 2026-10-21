@@ -1,8 +1,18 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { execSync } from "child_process";
 
 const BASE_URL = "http://app.localtest.me";
+
+function getAdminPassword() {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  try {
+    const pw = execSync('kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-password}"', { encoding: "utf-8" });
+    return Buffer.from(pw.trim(), "base64").toString("utf-8");
+  } catch (e) {
+    throw new Error("ADMIN_PASSWORD not set in env and failed to fetch from secret: " + e.message);
+  }
+}
 
 async function login(email, password) {
   const res = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -31,8 +41,19 @@ async function main() {
   console.log("=== PHASE 8: STAND-OUT ITEMS VERIFICATION & SECURITY HARDENING AUDIT ===");
   console.log("======================================================================\n");
 
-  const { user: adminUser, token: adminToken } = await login("admin@localtest.me", "REDACTED_ADMIN_PASS");
-  const { user: memberUser, token: memberToken } = await login("member@localtest.me", "REDACTED_MEMBER_PASS");
+  const adminPassword = getAdminPassword();
+  const { user: adminUser, token: adminToken } = await login("admin@localtest.me", adminPassword);
+
+  try {
+    execSync('kubectl -n uai exec -i statefulset/uai-postgres -- psql -U uai_user -d uai_gateway -c "DELETE FROM users WHERE email = \'member@localtest.me\';"');
+  } catch {}
+  const inviteRes = await fetch(`${BASE_URL}/api/users`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "member@localtest.me", role: "member" }),
+  });
+  const { temporaryPassword: memberPass } = await inviteRes.json();
+  const { user: memberUser, token: memberToken } = await login("member@localtest.me", memberPass);
 
   // ──────────────────────────────────────────────────────────────────
   // Check 1: Tool Permissions Per Role (Hidden from list & rejected on call)
@@ -68,8 +89,7 @@ async function main() {
   const { rawApiKey: adminApiKey } = await createApiKey(adminToken, "Phase8-Admin-Key");
 
   // Connect Member MCP client
-  const memberTransport = new SSEClientTransport(new URL(`${BASE_URL}/mcp`), {
-    eventSourceInit: { headers: { Authorization: `Bearer ${memberApiKey}` } },
+  const memberTransport = new StreamableHTTPClientTransport(new URL(`${BASE_URL}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${memberApiKey}` } },
   });
   const memberMcpClient = new Client({ name: "phase8-member", version: "1.0.0" }, { capabilities: {} });

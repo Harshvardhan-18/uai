@@ -101,15 +101,21 @@ export async function initDb(): Promise<void> {
       );
     `);
 
-    // Seed Admin User
+    // Sync Admin User & Password from Secret on startup
+    const passwordHash = await bcrypt.hash(config.adminPassword, 10);
     const adminExists = await client.query("SELECT id FROM users WHERE email = $1", [config.adminEmail]);
     if (adminExists.rowCount === 0) {
-      const passwordHash = await bcrypt.hash(config.adminPassword, 10);
       await client.query(
         "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'admin')",
         [config.adminEmail, passwordHash]
       );
       console.log(`[db] Seeded initial admin user: ${config.adminEmail}`);
+    } else {
+      await client.query(
+        "UPDATE users SET password_hash = $1 WHERE email = $2",
+        [passwordHash, config.adminEmail]
+      );
+      console.log(`[db] Synchronized admin password from environment secret.`);
     }
 
     // Seed Initial Upstream Servers (3 servers: woo, utils, everything)

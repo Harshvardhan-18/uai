@@ -3,7 +3,7 @@ import { User, McpTool } from '../types';
 import { getToken } from '../api';
 import { 
   MessageSquare, Send, Sparkles, Bot, User as UserIcon, 
-  Code, AlertCircle, ChevronDown, ChevronRight, CheckCircle2, 
+  Code, AlertCircle, AlertTriangle, ChevronDown, ChevronRight, CheckCircle2, 
   Clock, RefreshCw, Terminal
 } from 'lucide-react';
 
@@ -21,6 +21,9 @@ interface MessageItem {
   thought?: string;
   toolCalls?: ToolCallState[];
   isStreaming?: boolean;
+  provider?: string;
+  model?: string;
+  isFallback?: boolean;
 }
 
 interface ChatTabProps {
@@ -39,6 +42,7 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+  const [llmMeta, setLlmMeta] = useState<{ provider: string; model: string; isFallback: boolean } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const samplePrompts = [
@@ -119,9 +123,17 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
           try {
             const event = JSON.parse(jsonStr);
 
+            if (event.type === 'meta') {
+              setLlmMeta({ provider: event.provider, model: event.model, isFallback: event.isFallback });
+            }
+
             setMessages((prev) =>
               prev.map((msg) => {
                 if (msg.id !== assistantMsgId) return msg;
+
+                if (event.type === 'meta') {
+                  return { ...msg, provider: event.provider, model: event.model, isFallback: event.isFallback };
+                }
 
                 if (event.type === 'thought') {
                   return { ...msg, thought: event.content };
@@ -153,7 +165,18 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
                 }
 
                 if (event.type === 'done') {
-                  return { ...msg, text: event.content || msg.text, isStreaming: false, thought: undefined };
+                  if (event.provider) {
+                    setLlmMeta({ provider: event.provider, model: event.model, isFallback: event.isFallback });
+                  }
+                  return {
+                    ...msg,
+                    text: event.content || msg.text,
+                    isStreaming: false,
+                    thought: undefined,
+                    provider: event.provider,
+                    model: event.model,
+                    isFallback: event.isFallback,
+                  };
                 }
 
                 if (event.type === 'error') {
@@ -201,6 +224,15 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
 
       {/* Chat Container */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[650px] overflow-hidden">
+        {llmMeta?.isFallback && (
+          <div className="mx-6 mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3 text-xs text-amber-800 shadow-xs">
+            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+            <div>
+              <strong>Fallback Active:</strong> External LLM API key not configured in cluster or provider unreachable. Running via smart-intent-fallback.
+            </div>
+          </div>
+        )}
+
         {/* Messages Stream */}
         <div className="flex-1 p-6 overflow-y-auto space-y-6 bg-slate-50/50">
           {messages.map((m) => (
@@ -292,6 +324,13 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
                     {m.text && (
                       <div className="rounded-2xl rounded-tl-none px-4 py-3 bg-white border border-slate-200 text-slate-800 text-sm shadow-xs space-y-2">
                         <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                        <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
+                          <span className="flex items-center gap-1">
+                            <Bot className="w-3 h-3 text-slate-400" />
+                            Provider: <span className="font-medium text-slate-600">{m.provider || llmMeta?.provider || "UAI Agent"}</span>
+                          </span>
+                          <span>Model: <span className="font-mono text-slate-600">{m.model || llmMeta?.model || "default"}</span></span>
+                        </div>
                       </div>
                     )}
                   </div>

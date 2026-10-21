@@ -5,7 +5,7 @@ import { pool } from "../db/index.js";
 import { decrypt } from "../crypto/encryption.js";
 import { config } from "../config.js";
 import { AggregatedTool, UpstreamServer } from "../types/index.js";
-import { validateUpstreamUrl } from "../crypto/ssrf-guard.js";
+import { validateUpstreamUrl, mapTransportError } from "../crypto/ssrf-guard.js";
 
 interface ActiveConnection {
   client: Client;
@@ -99,7 +99,11 @@ export class UpstreamPool {
       }
     );
 
-    await this.withTimeout(client.connect(transport), config.upstreamTimeoutList, `Connecting to ${server.name}`);
+    try {
+      await this.withTimeout(client.connect(transport), config.upstreamTimeoutList, `Connecting to ${server.name}`);
+    } catch (err: any) {
+      throw new Error(mapTransportError(err));
+    }
 
     this.connections.set(server.slug, {
       client,
@@ -157,9 +161,15 @@ export class UpstreamPool {
             } as AggregatedTool;
           });
         } catch (err: any) {
-          // If server connection fails, remove broken connection from pool
+          // Passive failure detection: immediately mark Unreachable in DB on first failure
+          const mappedError = mapTransportError(err);
           this.connections.delete(server.slug);
-          console.warn(`[pool] Failed to fetch tools from ${server.name} (${server.slug}): ${err.message}`);
+          this.toolCache = null;
+          pool.query(
+            "UPDATE servers SET health_status = 'Unreachable', health_error = $1, last_health_check = NOW() WHERE id = $2",
+            [mappedError, server.id]
+          ).catch(() => {});
+          console.warn(`[pool] Passive failure detected on ${server.name} (${server.slug}): ${mappedError}`);
           throw err;
         }
       })
@@ -212,6 +222,12 @@ export class UpstreamPool {
       throw new Error(`Upstream server "${server.name}" (${serverSlug}) is currently disabled`);
     }
 
+    if (server.health_status === "Unreachable") {
+      throw new Error(
+        `Upstream server "${server.name}" (${serverSlug}) is Unreachable: ${server.health_error || "Connection failed"}`
+      );
+    }
+
     try {
       const client = await this.getClient(server);
       const callPromise = client.callTool({
@@ -231,9 +247,16 @@ export class UpstreamPool {
         toolName,
       };
     } catch (err: any) {
-      // Evict broken connection
+      // Passive failure detection: immediately mark Unreachable in DB on first tool call failure
+      const mappedError = mapTransportError(err);
       this.connections.delete(serverSlug);
-      throw err;
+      this.toolCache = null;
+      pool.query(
+        "UPDATE servers SET health_status = 'Unreachable', health_error = $1, last_health_check = NOW() WHERE id = $2",
+        [mappedError, server.id]
+      ).catch(() => {});
+      console.warn(`[pool] Passive failure detected on tool call ${namespacedName}: ${mappedError}`);
+      throw new Error(mappedError);
     }
   }
 

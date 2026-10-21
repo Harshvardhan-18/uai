@@ -1,4 +1,5 @@
 import { Router, Response } from "express";
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/index.js";
 import { authenticateRequest, requireAdmin, AuthenticatedRequest } from "../auth/auth-service.js";
@@ -28,15 +29,16 @@ userRouter.get("/", async (_req: AuthenticatedRequest, res: Response): Promise<v
 // 2. POST /api/users - Invite/create team member
 userRouter.post("/", async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const { email, password, role = "member" } = req.body;
-  if (!email || !password) {
-    res.status(400).json({ error: "Email and password are required" });
+  if (!email) {
+    res.status(400).json({ error: "Email is required" });
     return;
   }
 
   const validRole = role === "admin" ? "admin" : "member";
+  const userPassword = password || crypto.randomBytes(12).toString("base64url");
 
   try {
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(userPassword, 10);
     const result = await pool.query(
       `INSERT INTO users (email, password_hash, role)
        VALUES ($1, $2, $3)
@@ -44,7 +46,10 @@ userRouter.post("/", async (req: AuthenticatedRequest, res: Response): Promise<v
       [email.toLowerCase().trim(), hash, validRole]
     );
 
-    res.status(201).json({ user: result.rows[0] });
+    res.status(201).json({
+      user: result.rows[0],
+      ...(password ? {} : { temporaryPassword: userPassword }),
+    });
   } catch (err: any) {
     if (err.code === "23505") {
       res.status(409).json({ error: "A user with this email already exists" });

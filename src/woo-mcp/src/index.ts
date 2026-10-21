@@ -7,8 +7,14 @@ import { WooCommerceClient } from "./woo-client.js";
 
 const PORT = parseInt(process.env.PORT || "8000", 10);
 const WOO_URL = process.env.WOO_URL || "http://uai-woocommerce.uai.svc.cluster.local";
-const WOO_CONSUMER_KEY = process.env.WOO_CONSUMER_KEY || "REDACTED_WOO_CONSUMER_KEY";
-const WOO_CONSUMER_SECRET = process.env.WOO_CONSUMER_SECRET || "REDACTED_WOO_CONSUMER_SECRET";
+const WOO_CONSUMER_KEY = process.env.WOO_CONSUMER_KEY;
+if (!WOO_CONSUMER_KEY) {
+  throw new Error("FATAL CONFIG ERROR: Required environment variable WOO_CONSUMER_KEY is not set.");
+}
+const WOO_CONSUMER_SECRET = process.env.WOO_CONSUMER_SECRET;
+if (!WOO_CONSUMER_SECRET) {
+  throw new Error("FATAL CONFIG ERROR: Required environment variable WOO_CONSUMER_SECRET is not set.");
+}
 
 const wooClient = new WooCommerceClient({
   baseUrl: WOO_URL,
@@ -116,12 +122,13 @@ function createMcpServer(): McpServer {
         .default("any")
         .describe("Order status filter"),
       after: z.string().optional().describe("Limit response to resources published after a given ISO8601 compliant date (e.g. '2026-10-19T00:00:00Z')"),
+      before: z.string().optional().describe("Limit response to resources published before a given ISO8601 compliant date (e.g. '2026-10-21T23:59:59Z')"),
       per_page: z.number().optional().default(10).describe("Number of orders to return (default: 10)"),
       page: z.number().optional().default(1).describe("Page number (default: 1)"),
     },
-    async ({ status, after, per_page, page }) => {
+    async ({ status, after, before, per_page, page }) => {
       try {
-        const orders = await wooClient.listOrders({ status, after, per_page, page });
+        const orders = await wooClient.listOrders({ status, after, before, per_page, page });
         const summary = orders.map((o) => ({
           id: o.id,
           status: o.status,
@@ -294,7 +301,7 @@ app.post("/messages", async (req: Request, res: Response) => {
   await transport.handlePostMessage(req, res);
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`===============================================`);
   console.log(`woo-mcp server listening on port ${PORT}`);
   console.log(`SSE endpoint:    http://0.0.0.0:${PORT}/sse`);
@@ -302,4 +309,16 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Health endpoint: http://0.0.0.0:${PORT}/health`);
   console.log(`WooCommerce URL: ${WOO_URL}`);
   console.log(`===============================================`);
+});
+
+process.on("SIGTERM", () => {
+  console.log("[woo-mcp] SIGTERM received. Shutting down HTTP server immediately...");
+  if ((server as any).closeAllConnections) {
+    (server as any).closeAllConnections();
+  }
+  server.close(() => {
+    console.log("[woo-mcp] Server closed.");
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 1000).unref();
 });

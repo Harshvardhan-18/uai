@@ -32,7 +32,14 @@ export interface LLMResponse {
 
 export interface LLMProvider {
   name: string;
+  model: string;
   chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LLMResponse>;
+}
+
+function redactKey(key: string): string {
+  if (!key) return "<none>";
+  if (key.length <= 8) return "***";
+  return key.substring(0, 4) + "..." + key.substring(key.length - 4);
 }
 
 /**
@@ -41,6 +48,7 @@ export interface LLMProvider {
  */
 export class SmartIntentProvider implements LLMProvider {
   name = "smart-intent-fallback";
+  model = "smart-intent-fallback";
 
   async chat(messages: ChatMessage[], _tools: ToolDefinition[]): Promise<LLMResponse> {
     const lastMsg = messages[messages.length - 1];
@@ -59,7 +67,8 @@ export class SmartIntentProvider implements LLMProvider {
         const prodName = prod.name || "Product";
         const prodPrice = prod.price || prod.regular_price || "499";
         const prodId = prod.id || "new";
-        const permalink = prod.permalink || `http://store.localtest.me/product/${prodId}`;
+        let permalink = prod.permalink || `http://store.localtest.me/product/${prodId}`;
+        permalink = permalink.replace(/^https:\/\/store\.localtest\.me/, "http://store.localtest.me");
         return {
           content: `Product "${prodName}" has been successfully created in the WooCommerce catalog!\n\n- **Product ID:** ${prodId}\n- **Price:** $${prodPrice}\n- **Status:** Published\n- **Store URL:** [View on Storefront](${permalink})`,
         };
@@ -125,14 +134,16 @@ export class SmartIntentProvider implements LLMProvider {
 
     // Intent: "what orders came in today" / "list orders" / "get today's orders"
     if (text.includes("order") && (text.includes("today") || text.includes("what") || text.includes("list") || text.includes("get") || text.includes("show"))) {
-      // Check if user also asked to convert to EUR: "get today's orders, then convert the total to EUR"
+      const todayIso = new Date().toISOString().split("T")[0];
+      const afterDate = `${todayIso}T00:00:00Z`;
+      const beforeDate = `${todayIso}T23:59:59Z`;
       return {
-        content: "Checking the WooCommerce store for orders...",
+        content: "Checking the WooCommerce store for today's orders...",
         tool_calls: [
           {
             id: `call_${Date.now()}`,
             name: "woo__list_orders",
-            arguments: { per_page: 5 },
+            arguments: { after: afterDate, before: beforeDate, per_page: 10 },
           },
         ],
       };
@@ -178,21 +189,56 @@ export class SmartIntentProvider implements LLMProvider {
   }
 }
 
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  providerName: string,
+  maxRetries = 3
+): Promise<Response> {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    attempt++;
+    try {
+      const res = await fetch(url, init);
+      if (res.status === 429 || res.status >= 500) {
+        const errText = await res.text();
+        console.warn(`[llm-trace] ${providerName} attempt ${attempt} returned HTTP ${res.status}: ${errText.substring(0, 200)}`);
+        if (attempt >= maxRetries) {
+          throw new Error(`${providerName} API error (${res.status}): ${errText}`);
+        }
+        const retryAfterSec = parseInt(res.headers.get("retry-after") || "0", 10);
+        const backoffMs = retryAfterSec > 0 ? retryAfterSec * 1000 : Math.pow(2, attempt) * 1000;
+        console.log(`[llm-trace] ${providerName} 429/5xx detected. Backing off for ${backoffMs}ms before retry attempt ${attempt + 1}...`);
+        await new Promise((r) => setTimeout(r, backoffMs));
+        continue;
+      }
+      return res;
+    } catch (err: any) {
+      if (attempt >= maxRetries) throw err;
+      const backoffMs = Math.pow(2, attempt) * 1000;
+      console.warn(`[llm-trace] ${providerName} network error on attempt ${attempt}: ${err.message}. Retrying in ${backoffMs}ms...`);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw new Error(`${providerName} exceeded maximum retries (${maxRetries})`);
+}
+
 /**
  * Gemini Provider (Google Gemini API)
  */
 export class GeminiProvider implements LLMProvider {
   name = "gemini";
+  public model: string;
   private apiKey: string;
-  private model: string;
 
-  constructor(apiKey: string, model: string = "gemini-1.5-flash") {
+  constructor(apiKey: string, model: string = "gemini-2.5-flash") {
     this.apiKey = apiKey;
-    this.model = model || "gemini-1.5-flash";
+    this.model = model || "gemini-2.5-flash";
   }
 
   async chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LLMResponse> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+    console.log(`[llm-trace] Gemini Request -> Model: ${this.model}, Endpoint: https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${redactKey(this.apiKey)} (Tools: ${tools.length})`);
 
     // Convert messages to Gemini format
     const contents: any[] = [];
@@ -253,17 +299,18 @@ export class GeminiProvider implements LLMProvider {
       body.systemInstruction = { parts: [{ text: systemInstruction }] };
     }
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Gemini API error (${res.status}): ${await res.text()}`);
-    }
+    const res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      "Gemini"
+    );
 
     const data = (await res.json()) as any;
+    console.log(`[llm-trace] Gemini Response -> Status: ${res.status}, Candidates: ${data.candidates?.length || 0}`);
     const candidate = data.candidates?.[0]?.content?.parts || [];
     let text = "";
     const toolCalls: any[] = [];
@@ -271,6 +318,7 @@ export class GeminiProvider implements LLMProvider {
     for (const part of candidate) {
       if (part.text) text += part.text;
       if (part.functionCall) {
+        console.log(`[llm-trace] Gemini Tool Call -> ${part.functionCall.name} args:`, JSON.stringify(part.functionCall.args));
         toolCalls.push({
           id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           name: part.functionCall.name,
@@ -291,9 +339,9 @@ export class GeminiProvider implements LLMProvider {
  */
 export class OpenAICompatibleProvider implements LLMProvider {
   name: string;
+  public model: string;
   private apiKey: string;
   private baseUrl: string;
-  private model: string;
 
   constructor(name: string, baseUrl: string, apiKey: string, model: string) {
     this.name = name;
@@ -303,6 +351,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   async chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LLMResponse> {
+    console.log(`[llm-trace] ${this.name} Request -> Model: ${this.model}, BaseUrl: ${this.baseUrl}, Key: ${redactKey(this.apiKey)} (Tools: ${tools.length})`);
     const formattedTools = tools.map((t) => ({
       type: "function",
       function: {
@@ -312,31 +361,56 @@ export class OpenAICompatibleProvider implements LLMProvider {
       },
     }));
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
+    const res = await fetchWithRetry(
+      `${this.baseUrl}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          tools: formattedTools.length > 0 ? formattedTools : undefined,
+        }),
       },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        tools: formattedTools.length > 0 ? formattedTools : undefined,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`${this.name} API error (${res.status}): ${await res.text()}`);
-    }
+      this.name
+    );
 
     const data = (await res.json()) as any;
+    console.log(`[llm-trace] ${this.name} Response -> Status: ${res.status}`);
     const choice = data.choices?.[0]?.message;
     const content = choice?.content || "";
-    const toolCalls = choice?.tool_calls?.map((tc: any) => ({
-      id: tc.id,
-      name: tc.function.name,
-      arguments: typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments,
-    }));
+    const toolCalls = choice?.tool_calls?.map((tc: any) => {
+      let args: any = {};
+      if (typeof tc.function.arguments === "string") {
+        try {
+          args = JSON.parse(tc.function.arguments);
+        } catch (parseErr: any) {
+          console.warn(`[llm-trace] Malformed tool call arguments string: "${tc.function.arguments}". Attempting sanitization...`);
+          try {
+            const cleaned = tc.function.arguments.replace(/,\s*([}\]])/g, "$1");
+            args = JSON.parse(cleaned);
+          } catch {
+            console.warn(`[llm-trace] Sanitization failed, falling back to empty arguments object {}`);
+            args = {};
+          }
+        }
+      } else if (tc.function.arguments) {
+        args = tc.function.arguments;
+      }
+
+      return {
+        id: tc.id,
+        name: tc.function.name,
+        arguments: args,
+      };
+    });
+
+    if (toolCalls && toolCalls.length > 0) {
+      console.log(`[llm-trace] ${this.name} Tool Calls (${toolCalls.length}) ->`, toolCalls.map((t: any) => t.name).join(", "));
+    }
 
     return {
       content,
@@ -353,7 +427,7 @@ export function getLLMProvider(): LLMProvider {
   const apiKey = config.llmApiKey;
 
   if ((provider === "gemini" || (provider === "auto" && apiKey.startsWith("AIza"))) && apiKey) {
-    return new GeminiProvider(apiKey, config.llmModel || "gemini-1.5-flash");
+    return new GeminiProvider(apiKey, config.llmModel || "gemini-2.5-flash");
   }
 
   if ((provider === "groq" || (provider === "auto" && apiKey.startsWith("gsk_"))) && apiKey) {
@@ -361,7 +435,7 @@ export function getLLMProvider(): LLMProvider {
       "groq",
       "https://api.groq.com/openai/v1",
       apiKey,
-      config.llmModel || "llama-3.3-70b-versatile"
+      config.llmModel || "openai/gpt-oss-120b"
     );
   }
 

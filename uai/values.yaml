@@ -23,6 +23,11 @@ woo-mcp:
 
 gateway:
   enabled: true
+  env:
+    llmProvider: "groq"
+    llmModel: "openai/gpt-oss-120b"
+    healthCheckIntervalMs: 10000
+
 
 dashboard:
   enabled: true

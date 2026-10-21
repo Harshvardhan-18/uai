@@ -1,4 +1,16 @@
+import { execSync } from "child_process";
+
 const BASE_URL = "http://app.localtest.me";
+
+function getAdminPassword() {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  try {
+    const pw = execSync('kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-password}"', { encoding: "utf-8" });
+    return Buffer.from(pw.trim(), "base64").toString("utf-8");
+  } catch (e) {
+    throw new Error("ADMIN_PASSWORD not set in env and failed to fetch from secret: " + e.message);
+  }
+}
 
 async function main() {
   console.log("============================================================");
@@ -22,12 +34,13 @@ async function main() {
 
   // Step 2: Admin Login
   console.log("--- Step 2: Admin Authentication Flow ---");
+  const adminPassword = getAdminPassword();
   const loginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       email: "admin@localtest.me",
-      password: "REDACTED_ADMIN_PASS",
+      password: adminPassword,
     }),
   });
   if (!loginRes.ok) throw new Error(`Login failed: ${await loginRes.text()}`);
@@ -78,7 +91,7 @@ async function main() {
     body: JSON.stringify({
       name: "Temporary Demo Upstream",
       slug: testSlug,
-      url: "http://uai-temp-demo:9000/mcp",
+      url: "http://uai-everything-mcp:8002/mcp-temp",
       auth_type: "bearer",
       auth_token: "super-secret-vault-token-xyz987",
     }),
@@ -123,23 +136,22 @@ async function main() {
     },
     body: JSON.stringify({
       email: memberEmail,
-      password: "REDACTED_MEMBER_PASS",
       role: "member",
     }),
   });
 
   if (!inviteRes.ok) throw new Error(`Invite user failed: ${await inviteRes.text()}`);
-  const { user: newMember } = await inviteRes.json();
+  const { user: newMember, temporaryPassword: memberPassword } = await inviteRes.json();
   console.log(`Created member: ${newMember.email} (Role: ${newMember.role})`);
 
-  // Login as the new member
-  console.log("Logging in as newly created member...");
+  // Login as the new member using returned temporary password
+  console.log("Logging in as newly created member using temporary password...");
   const memberLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       email: memberEmail,
-      password: "REDACTED_MEMBER_PASS",
+      password: memberPassword,
     }),
   });
   const { token: memberToken } = await memberLoginRes.json();

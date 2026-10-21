@@ -6,10 +6,10 @@ const IV_LENGTH = 12; // 96 bits for GCM
 
 function getKey(): Buffer {
   const hex = config.encryptionKey.trim();
-  if (hex.length === 64) {
+  if (hex.length === 64 && /^[0-9a-fA-F]+$/.test(hex)) {
     return Buffer.from(hex, "hex");
   }
-  // If not 64 hex characters, hash it to 32 bytes
+  // If not 64 valid hex characters, derive a 32-byte key via sha256
   return crypto.createHash("sha256").update(hex).digest();
 }
 

@@ -76,10 +76,11 @@ export class WooCommerceClient {
   }
 
   // 3. list_orders
-  async listOrders(params: { status?: string; after?: string; per_page?: number; page?: number } = {}) {
+  async listOrders(params: { status?: string; after?: string; before?: string; per_page?: number; page?: number } = {}) {
     const query = new URLSearchParams();
     if (params.status && params.status !== "any") query.append("status", params.status);
     if (params.after) query.append("after", params.after);
+    if (params.before) query.append("before", params.before);
     if (params.per_page) query.append("per_page", String(params.per_page));
     if (params.page) query.append("page", String(params.page));
 

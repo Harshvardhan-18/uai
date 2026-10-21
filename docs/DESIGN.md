@@ -163,5 +163,10 @@ The platform is designed to run identically on local development clusters (kind)
 | **Domain Strategy** | `*.localtest.me` (resolves to `127.0.0.1`) | Real domains or `*.nip.io` | `ingress.storeDomain`, `ingress.appDomain` |
 | **Ingress Port Binding** | hostPort 80/443 mapping on kind node | LoadBalancer / HostPort on VPS | Cluster provider config |
 | **Storage Class** | `standard` (kind hostpath provisioner) | `local-path` (k3s default) | Default cluster StorageClass |
-| **Secrets Management** | Kubernetes Secrets (seeded dummy dev keys) | Kubernetes Secrets (production generated keys) | `values-prod.yaml` references |
 | **Security Context** | Identical non-root UIDs across all pods | Identical non-root UIDs across all pods | `securityContext` templates |
+| **Ingress TLS** | Plain HTTP (ingress-nginx) | Automated TLS (`spec.tls` via cert-manager) | `ingress.tls` |
+
+> [!NOTE]
+> **Production Validation Status**: Production deployment configuration (`values-prod.yaml`) is validated via `helm lint` and `helm template` only. Live cluster verification is demonstrated on local kind with 100% feature parity.
+>
+> **Known Security Limitation — DNS Rebinding Window**: The SSRF guard resolves hostnames asynchronously before establishing upstream connections. While loopback, cloud metadata, in-cluster private ranges, and non-allowlisted Kubernetes services are blocked, a time-of-check to time-of-use (TOCTOU) DNS rebinding window theoretically exists between resolution and socket connect if an external DNS server returns a TTL of 0. In-cluster upstreams are protected via strict `host:port` allowlisting.

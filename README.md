@@ -67,7 +67,7 @@ helm repo update
 helm install ingress-nginx ingress-nginx/ingress-nginx \
   -n ingress-nginx --create-namespace \
   --set controller.hostPort.enabled=true \
-  --set controller.nodeSelector."ingress-ready"="true" \
+  --set-string controller.nodeSelector.ingress-ready="true" \
   --set controller.tolerations[0].key="node-role.kubernetes.io/control-plane" \
   --set controller.tolerations[0].operator="Equal" \
   --set controller.tolerations[0].effect="NoSchedule"
@@ -183,7 +183,12 @@ npx @modelcontextprotocol/inspector http://app.localtest.me/mcp \
    ```bash
    helm install uai ./uai -f ./uai/values-prod.yaml -n uai --create-namespace
    ```
-   *`values-prod.yaml` uses Traefik as the default ingress class, binds real domains, and configures persistent PVCs using k3s `local-path`.*
+   *`values-prod.yaml` uses Traefik as the default ingress class, binds real domains, configures Ingress TLS with cert-manager annotations, and sets persistent PVCs.*
+
+> [!NOTE]
+> **Production Validation Status**: `values-prod.yaml` (configured with Traefik ingress class and cert-manager TLS) was validated via `helm lint` and `helm template` only. It was not deployed to a live k3s or k3d cluster during this assignment audit (the live cluster under test is the local Kind development cluster). For live production deployments on k3s, Traefik is enabled by default, and cert-manager must be installed to issue the configured TLS certificates.
+>
+> **Helm Lookup Limitation**: Helm's built-in `lookup` function queries secrets from a live Kubernetes API during `helm install` / `helm upgrade`. During offline `helm template` dry-runs or linting, `lookup` returns empty by design and generates fresh random secrets. In live cluster operations, existing Secrets annotated with `helm.sh/resource-policy: keep` are preserved across upgrades.
 
 ---
 

@@ -1,7 +1,7 @@
 import { pool } from "../db/index.js";
 import { config } from "../config.js";
 import { UpstreamServer } from "../types/index.js";
-import { validateUpstreamUrl } from "../crypto/ssrf-guard.js";
+import { validateUpstreamUrl, mapTransportError } from "../crypto/ssrf-guard.js";
 
 export class HealthChecker {
   private timer: NodeJS.Timeout | null = null;
@@ -56,7 +56,7 @@ export class HealthChecker {
         clearTimeout(timeout);
       }
     } catch (err: any) {
-      return { status: "Unreachable", error: err.message || "Connection failed" };
+      return { status: "Unreachable", error: mapTransportError(err) };
     }
   }
 

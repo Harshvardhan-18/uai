@@ -1,18 +1,30 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { execSync } from "child_process";
 
 const GATEWAY_URL = "http://app.localtest.me";
+
+function getAdminPassword() {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  try {
+    const pw = execSync('kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-password}"', { encoding: "utf-8" });
+    return Buffer.from(pw.trim(), "base64").toString("utf-8");
+  } catch (e) {
+    throw new Error("ADMIN_PASSWORD not set in env and failed to fetch from secret: " + e.message);
+  }
+}
 
 async function main() {
   console.log("=== RESILIENCE TEST: ISOLATION DURING UPSTREAM FAILURE ===");
 
   // 1. Get admin token & key
+  const adminPassword = getAdminPassword();
   const loginRes = await fetch(`${GATEWAY_URL}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       email: "admin@localtest.me",
-      password: "REDACTED_ADMIN_PASS",
+      password: adminPassword,
     }),
   });
   const { token } = await loginRes.json();
@@ -25,12 +37,11 @@ async function main() {
     },
     body: JSON.stringify({ name: "Resilience Test Key" }),
   });
-  const { rawApiKey } = await keyRes.json();
+  const { rawApiKey, key: keyObj } = await keyRes.json();
 
   // 2. Connect client
   const mcpUrl = new URL(`${GATEWAY_URL}/mcp`);
-  const transport = new SSEClientTransport(mcpUrl, {
-    eventSourceInit: { headers: { Authorization: `Bearer ${rawApiKey}` } },
+  const transport = new StreamableHTTPClientTransport(mcpUrl, {
     requestInit: { headers: { Authorization: `Bearer ${rawApiKey}` } },
   });
   const client = new Client({ name: "resilience-tester", version: "1.0.0" }, { capabilities: {} });
@@ -63,6 +74,11 @@ async function main() {
   console.log(utilsRes.content[0].text);
 
   await client.close();
+  // Cleanup test key
+  await fetch(`${GATEWAY_URL}/api/keys/${keyObj.id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
   console.log("\nResilience verification completed successfully!");
 }
 

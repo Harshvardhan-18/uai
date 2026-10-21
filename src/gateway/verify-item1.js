@@ -4,9 +4,17 @@ import { execSync } from "child_process";
 
 const GATEWAY_URL = "http://app.localtest.me/mcp";
 const API_BASE = "http://app.localtest.me/api";
-const MEMBER_KEY = "REDACTED_GW_KEY";
 const ADMIN_EMAIL = "admin@localtest.me";
-const ADMIN_PASSWORD = "REDACTED_ADMIN_PASS";
+
+function getAdminPassword() {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  try {
+    const pw = execSync('kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-password}"', { encoding: "utf-8" });
+    return Buffer.from(pw.trim(), "base64").toString("utf-8");
+  } catch (e) {
+    throw new Error("ADMIN_PASSWORD not set in env and failed to fetch from secret: " + e.message);
+  }
+}
 
 async function main() {
   console.log("================================================================================");
@@ -23,12 +31,35 @@ async function main() {
   ).toString();
   console.log(dbServers.trim());
 
-  // 2. Connect real MCP client using Streamable HTTP with member key
-  console.log("\n[B] CONNECTING EXTERNAL MCP CLIENT OVER STREAMABLE HTTP WITH MEMBER KEY:");
+  // 2. Obtain admin credentials and dynamically create an API key for the test
+  console.log("\n[B] AUTHENTICATING AND GENERATING TEMPORARY API KEY:");
+  const adminPassword = getAdminPassword();
+  const loginRes = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: ADMIN_EMAIL, password: adminPassword }),
+  });
+  if (!loginRes.ok) throw new Error(`Admin login failed: ${await loginRes.text()}`);
+  const { token: adminToken } = await loginRes.json();
+  const cookie = loginRes.headers.get("set-cookie")?.split(";")[0] || "";
+
+  const keyRes = await fetch(`${API_BASE}/keys`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name: "Item1 Test Dynamic Key" }),
+  });
+  if (!keyRes.ok) throw new Error(`Key creation failed: ${await keyRes.text()}`);
+  const { rawApiKey: memberKey, key: keyObj } = await keyRes.json();
+  console.log(`  [PASS] Dynamically created test key #${keyObj.id} (prefix: ${keyObj.key_prefix})`);
+
+  console.log("\n[C] CONNECTING EXTERNAL MCP CLIENT OVER STREAMABLE HTTP:");
   const transport = new StreamableHTTPClientTransport(new URL(GATEWAY_URL), {
     requestInit: {
       headers: {
-        Authorization: `Bearer ${MEMBER_KEY}`,
+        Authorization: `Bearer ${memberKey}`,
       },
     },
   });
@@ -66,42 +97,74 @@ async function main() {
 
   // 4. API / Dashboard Health Status & Recovery Verification
   console.log("\n[E] HEALTH STATUS TRANSITION TO UNREACHABLE (WITH FAILURE REASON) & RECOVERY:");
-  // Login to admin API to trigger and inspect health check
-  const loginRes = await fetch(`${API_BASE}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
-  });
-  const cookie = loginRes.headers.get("set-cookie")?.split(";")[0] || "";
 
   // Scale down utils-mcp to prove Unreachable status and reason
+  const tDown0 = Date.now();
   execSync("kubectl scale deployment -n uai uai-utils-mcp --replicas=0");
-  await new Promise((r) => setTimeout(r, 2000));
-  const healthCheckDown = await fetch(`${API_BASE}/servers/check-health`, {
-    method: "POST",
-    headers: { Cookie: cookie },
-  });
-  const downJson = await healthCheckDown.json();
-  const utilsDown = downJson.servers.find((s) => s.slug === "utils");
-  console.log(`  [DOWN STATE] Server '${utilsDown.name}':`);
-  console.log(`    Status:        ${utilsDown.health_status}`);
-  console.log(`    Failure Reason: ${utilsDown.health_error}`);
+
+  let flipped = false;
+  let downStatus = "";
+  let downReason = "";
+  let timeToDetect = 0;
+
+  while (Date.now() - tDown0 < 45000) {
+    const healthCheckDown = await fetch(`${API_BASE}/servers/check-health`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const downJson = await healthCheckDown.json();
+    const utilsDown = downJson.servers?.find((s) => s.slug === "utils");
+    if (utilsDown && utilsDown.health_status === "Unreachable") {
+      flipped = true;
+      downStatus = utilsDown.health_status;
+      downReason = utilsDown.health_error;
+      timeToDetect = Date.now() - tDown0;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  if (!flipped) {
+    throw new Error("FAIL: Server status did not flip to Unreachable within 45s!");
+  }
+
+  console.log(`  [DOWN STATE DETECTED] in ${timeToDetect}ms:`);
+  console.log(`    Status:        ${downStatus}`);
+  console.log(`    Failure Reason: ${downReason}`);
 
   // Scale back up and verify recovery
   console.log("\n  Scaling utils-mcp back to 1 replica and waiting for deployment readiness...");
   execSync("kubectl scale deployment -n uai uai-utils-mcp --replicas=1");
   execSync("kubectl rollout status deployment -n uai uai-utils-mcp --timeout=60s");
-  await new Promise((r) => setTimeout(r, 2000));
 
-  const healthCheckUp = await fetch(`${API_BASE}/servers/check-health`, {
-    method: "POST",
-    headers: { Cookie: cookie },
-  });
-  const upJson = await healthCheckUp.json();
-  const utilsUp = upJson.servers.find((s) => s.slug === "utils");
-  console.log(`  [RECOVERED STATE] Server '${utilsUp.name}':`);
-  console.log(`    Status:        ${utilsUp.health_status}`);
-  console.log(`    Failure Reason: ${utilsUp.health_error || "none (healthy)"}`);
+  let recovered = false;
+  let recStatus = "";
+  let recReason = "";
+  const tRec0 = Date.now();
+
+  while (Date.now() - tRec0 < 20000) {
+    const healthCheckUp = await fetch(`${API_BASE}/servers/check-health`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const upJson = await healthCheckUp.json();
+    const utilsUp = upJson.servers?.find((s) => s.slug === "utils");
+    if (utilsUp && utilsUp.health_status === "Connected") {
+      recovered = true;
+      recStatus = utilsUp.health_status;
+      recReason = utilsUp.health_error;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  if (!recovered) {
+    throw new Error(`FAIL: Server did not recover to Connected state! Got: ${recStatus}`);
+  }
+
+  console.log(`  [RECOVERED STATE]:`);
+  console.log(`    Status:        ${recStatus}`);
+  console.log(`    Failure Reason: ${recReason || "none (healthy)"}`);
 
   // 5. Test deliberately slow upstream (sleep 35s > 30s timeout)
   console.log("\n[F] TIMEOUT HANDLING: DELIBERATELY SLOW UPSTREAM (utils__slow_operation with 35s delay):");
@@ -128,6 +191,11 @@ async function main() {
   console.log(`    Response: ${echoResult.content[0].text}`);
 
   await client.close();
+  // Cleanup test key
+  await fetch(`${API_BASE}/keys/${keyObj.id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
   console.log("\n================================================================================");
   console.log("ITEM 1 VERDICT: PASS (All A4 step 6 and Streamable HTTP requirements verified)");
   console.log("================================================================================");

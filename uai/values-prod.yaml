@@ -7,3 +7,17 @@ ingress:
   appDomain: app.example.com       # Replace with real domain
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - hosts:
+        - store.example.com
+      secretName: store-tls
+    - hosts:
+        - app.example.com
+      secretName: app-tls
+
+gateway:
+  env:
+    llmProvider: "groq"
+    llmModel: "openai/gpt-oss-120b"
+    healthCheckIntervalMs: 10000
+

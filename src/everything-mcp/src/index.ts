@@ -137,9 +137,21 @@ app.post("/messages", async (req: Request, res: Response) => {
   await transport.handlePostMessage(req, res);
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`everything-mcp server listening on port ${PORT}`);
   console.log(`SSE endpoint:    http://0.0.0.0:${PORT}/sse`);
   console.log(`Messages POST:   http://0.0.0.0:${PORT}/messages`);
   console.log(`Health endpoint: http://0.0.0.0:${PORT}/health`);
+});
+
+process.on("SIGTERM", () => {
+  console.log("[everything-mcp] SIGTERM received. Shutting down HTTP server immediately...");
+  if ((server as any).closeAllConnections) {
+    (server as any).closeAllConnections();
+  }
+  server.close(() => {
+    console.log("[everything-mcp] Server closed.");
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 1000).unref();
 });

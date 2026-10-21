@@ -56,7 +56,10 @@ spec:
             - name: ADMIN_USER
               value: {{ .Values.site.adminUser | quote }}
             - name: ADMIN_PASSWORD
-              value: {{ .Values.site.adminPassword | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-woo-credentials
+                  key: admin-password
             - name: ADMIN_EMAIL
               value: {{ .Values.site.adminEmail | quote }}
             - name: WOO_CONSUMER_KEY
@@ -112,7 +115,7 @@ spec:
                   --dbname="$WORDPRESS_DB_NAME" \
                   --dbuser="$WORDPRESS_DB_USER" \
                   --dbpass="$WORDPRESS_DB_PASSWORD" \
-                  --extra-php="define('FS_METHOD', 'direct'); define('WP_HOME', '$SITE_URL'); define('WP_SITEURL', '$SITE_URL'); \$_SERVER['HTTPS'] = 'on';"
+                  --extra-php="define('FS_METHOD', 'direct'); define('WP_HOME', '$SITE_URL'); define('WP_SITEURL', '$SITE_URL'); if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos(\$_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; } if (isset(\$_SERVER['REQUEST_URI']) && strpos(\$_SERVER['REQUEST_URI'], '/wp-json') !== false) { \$_SERVER['HTTPS'] = 'on'; }"
               fi
 
               # 4. Install WordPress core if not installed
@@ -153,6 +156,7 @@ spec:
                   'enable_for_virtual' => 'yes'
               ));
               update_option('woocommerce_currency', 'USD');
+              update_option('timezone_string', '{{ .Values.site.timezone | default "UTC" }}');
               if (function_exists('wc_create_pages')) {
                   wc_create_pages();
               }

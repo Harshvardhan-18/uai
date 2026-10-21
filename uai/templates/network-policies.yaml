@@ -35,8 +35,10 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: woocommerce
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [woocommerce, woocommerce-bootstrap]
       ports:
         - port: 3306
           protocol: TCP

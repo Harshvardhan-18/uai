@@ -1,7 +1,18 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { execSync } from "child_process";
 
 const BASE_URL = "http://app.localtest.me";
+
+function getAdminPassword() {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  try {
+    const pw = execSync('kubectl get secret -n uai uai-gateway -o jsonpath="{.data.admin-password}"', { encoding: "utf-8" });
+    return Buffer.from(pw.trim(), "base64").toString("utf-8");
+  } catch (e) {
+    throw new Error("ADMIN_PASSWORD not set in env and failed to fetch from secret: " + e.message);
+  }
+}
 
 async function login(email, password) {
   const res = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -64,7 +75,8 @@ async function main() {
   // Check 1: Admin Sign-in & Upstream Server Verification
   // ──────────────────────────────────────────────────────────────────
   console.log("--- Check 1: User A (Admin) Authentication & Upstreams Check ---");
-  const { user: adminUser, token: adminToken } = await login("admin@localtest.me", "REDACTED_ADMIN_PASS");
+  const adminPassword = getAdminPassword();
+  const { user: adminUser, token: adminToken } = await login("admin@localtest.me", adminPassword);
   console.log(`User A authenticated: ${adminUser.email} (Role: ${adminUser.role})`);
 
   const serversRes = await fetch(`${BASE_URL}/api/servers`, {
@@ -95,7 +107,7 @@ async function main() {
     body: JSON.stringify({
       name: "Temporary Audit Upstream",
       slug: demoSlug,
-      url: "http://uai-demo-temp:9999/mcp",
+      url: "http://uai-everything-mcp:8002/mcp-audit",
       auth_type: "bearer",
       auth_token: "secret-token-do-not-leak",
     }),
@@ -127,26 +139,24 @@ async function main() {
   // ──────────────────────────────────────────────────────────────────
   console.log("--- Check 3: Admin Inviting User B (Member) ---");
   const memberEmail = "member@localtest.me";
-  const memberPass = "REDACTED_MEMBER_PASS";
 
-  // Check if member already exists; if not, create
-  let memberToken;
+  // Recreate clean member account via invite flow
   try {
-    const memLogin = await login(memberEmail, memberPass);
-    memberToken = memLogin.token;
-    console.log(`Member "${memberEmail}" already exists. Successfully signed in.`);
-  } catch {
-    console.log(`Creating member account "${memberEmail}"...`);
-    const inviteRes = await fetch(`${BASE_URL}/api/users`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ email: memberEmail, password: memberPass, role: "member" }),
-    });
-    if (!inviteRes.ok) throw new Error(`Failed to invite member: ${await inviteRes.text()}`);
-    const memLogin = await login(memberEmail, memberPass);
-    memberToken = memLogin.token;
-    console.log(`Member account created and authenticated!`);
-  }
+    execSync('kubectl -n uai exec -i statefulset/uai-postgres -- psql -U uai_user -d uai_gateway -c "DELETE FROM users WHERE email = \'member@localtest.me\';"');
+  } catch {}
+
+  console.log(`Inviting member account "${memberEmail}" via admin API...`);
+  const inviteRes = await fetch(`${BASE_URL}/api/users`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: memberEmail, role: "member" }),
+  });
+  if (!inviteRes.ok) throw new Error(`Failed to invite member: ${await inviteRes.text()}`);
+  const { user: newMember, temporaryPassword: memberPass } = await inviteRes.json();
+  console.log(`Member account invited! Temporary password generated dynamically.`);
+  const memLogin = await login(memberEmail, memberPass);
+  const memberToken = memLogin.token;
+  console.log(`Member authenticated successfully!`);
 
   // ──────────────────────────────────────────────────────────────────
   // Check 4: Member RBAC Restrictions (Negative Tests)
@@ -239,8 +249,7 @@ async function main() {
   // Check 6: External MCP Client Call with Member API Key & Audit Check
   // ──────────────────────────────────────────────────────────────────
   console.log("--- Check 6: External MCP Client Calling Tools as Member ---");
-  const mcpTransport = new SSEClientTransport(new URL(`${BASE_URL}/mcp`), {
-    eventSourceInit: { headers: { Authorization: `Bearer ${memberRawKey}` } },
+  const mcpTransport = new StreamableHTTPClientTransport(new URL(`${BASE_URL}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${memberRawKey}` } },
   });
   const memberMcpClient = new Client({ name: "member-mcp-client", version: "1.0.0" }, { capabilities: {} });
@@ -290,11 +299,12 @@ async function main() {
   console.log("Attempting to connect with revoked key...");
   let keyRejected = false;
   try {
-    const badTransport = new SSEClientTransport(new URL(`${BASE_URL}/mcp`), {
-      eventSourceInit: { headers: { Authorization: `Bearer ${memberRawKey}` } },
+    const badTransport = new StreamableHTTPClientTransport(new URL(`${BASE_URL}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${memberRawKey}` } },
     });
     const badClient = new Client({ name: "bad-key-client", version: "1.0.0" }, { capabilities: {} });
     await badClient.connect(badTransport);
+    await badClient.listTools();
   } catch (err) {
     keyRejected = true;
     console.log(`Connection correctly REJECTED on next call: ${err.message}`);
@@ -309,6 +319,14 @@ async function main() {
   console.log("--- Check 8: Chat Agent Execution by Member ---");
   const memberChatPrompt = "echo Rehearsal test message from Member";
   const chatEvents = await readSSEStream(`${BASE_URL}/api/chat`, memberToken, { message: memberChatPrompt });
+  
+  // Strict Assertion: LLM Provider MUST NOT be the fallback
+  const metaEvent = chatEvents.find((e) => e.type === "meta");
+  if (!metaEvent || metaEvent.provider === "smart-intent-fallback" || metaEvent.isFallback === true) {
+    throw new Error(`TEST FAILURE: LLM provider must NOT be fallback! Provider: ${metaEvent?.provider}, isFallback: ${metaEvent?.isFallback}`);
+  }
+  console.log(`  [LLM Verified] Provider: ${metaEvent.provider} (${metaEvent.model}) - isFallback: false`);
+
   const toolCallEvent = chatEvents.find((e) => e.type === "tool_call_start");
   const doneEvent = chatEvents.find((e) => e.type === "done");
 
@@ -332,8 +350,7 @@ async function main() {
   // ──────────────────────────────────────────────────────────────────
   console.log("--- Check 9: Fault Isolation Verification ---");
   console.log("Testing gateway call to everything__echo and woo__list_orders...");
-  const adminMcpTransport = new SSEClientTransport(new URL(`${BASE_URL}/mcp`), {
-    eventSourceInit: { headers: { Authorization: `Bearer ${adminRawKey}` } },
+  const adminMcpTransport = new StreamableHTTPClientTransport(new URL(`${BASE_URL}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${adminRawKey}` } },
   });
   const adminMcpClient = new Client({ name: "admin-resilience-check", version: "1.0.0" }, { capabilities: {} });

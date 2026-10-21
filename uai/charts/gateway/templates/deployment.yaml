@@ -59,6 +59,28 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-gateway
                   key: admin-password
+            {{- if .Values.env.llmProvider }}
+            - name: LLM_PROVIDER
+              value: {{ .Values.env.llmProvider | quote }}
+            {{- end }}
+            {{- if .Values.env.llmModel }}
+            - name: LLM_MODEL
+              value: {{ .Values.env.llmModel | quote }}
+            {{- end }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: uai-llm
+                  key: llm-api-key
+                  optional: true
+            {{- if .Values.env.healthCheckIntervalMs }}
+            - name: HEALTH_CHECK_INTERVAL_MS
+              value: {{ .Values.env.healthCheckIntervalMs | quote }}
+            {{- end }}
+            {{- if .Values.env.inClusterAllowlist }}
+            - name: IN_CLUSTER_ALLOWLIST
+              value: {{ .Values.env.inClusterAllowlist | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 3000

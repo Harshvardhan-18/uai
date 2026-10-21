@@ -36,7 +36,7 @@ authRouter.post("/login", async (req: Request, res: Response): Promise<void> => 
 
   res.cookie("uai_session", token, {
     httpOnly: true,
-    secure: false, // set to false for local HTTP, true if HTTPS
+    secure: req.secure || req.headers["x-forwarded-proto"] === "https",
     sameSite: "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     path: "/",
