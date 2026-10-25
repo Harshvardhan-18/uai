@@ -145,8 +145,8 @@ spec:
               echo "Configuring permalink structure..."
               wp rewrite structure '/%postname%/' --hard
 
-              # 7. Enable COD (Cash on Delivery) payment gateway
-              echo "Enabling COD payment gateway..."
+              # 7. Enable COD (Cash on Delivery) payment gateway & Storefront Display
+              echo "Enabling COD payment gateway and disabling coming soon mode..."
               wp eval "
               update_option('woocommerce_cod_settings', array(
                   'enabled' => 'yes',
@@ -156,11 +156,19 @@ spec:
                   'enable_for_virtual' => 'yes'
               ));
               update_option('woocommerce_currency', 'USD');
+              update_option('woocommerce_coming_soon', 'no');
               update_option('timezone_string', '{{ .Values.site.timezone | default "UTC" }}');
               if (function_exists('wc_create_pages')) {
                   wc_create_pages();
               }
               "
+
+              # 7b. Set Front Page to WooCommerce Shop Page
+              SHOP_ID=$(wp post list --post_type=page --name=shop --field=ID --format=ids)
+              if [ -n "$SHOP_ID" ]; then
+                wp option update show_on_front 'page'
+                wp option update page_on_front "$SHOP_ID"
+              fi
 
               # 8. Create WooCommerce REST API Key for MCP Gateway
               echo "Configuring WooCommerce REST API Key..."
