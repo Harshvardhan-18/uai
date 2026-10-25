@@ -81,6 +81,12 @@ spec:
             - name: IN_CLUSTER_ALLOWLIST
               value: {{ .Values.env.inClusterAllowlist | quote }}
             {{- end }}
+            - name: SITE_TIMEZONE
+              value: {{ .Values.env.siteTimezone | default "Asia/Kolkata" | quote }}
+            - name: REQUIRE_WRITE_CONFIRMATION
+              value: {{ default "true" .Values.env.requireWriteConfirmation | quote }}
+            - name: UPSTREAM_CONNECT_TIMEOUT
+              value: {{ default "2500" .Values.env.upstreamConnectTimeout | quote }}
           ports:
             - name: http
               containerPort: 3000

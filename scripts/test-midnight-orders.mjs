@@ -34,6 +34,7 @@ async function createOrderWithDate(dateCreatedGmt, customerName) {
     body: JSON.stringify({
       payment_method: "cod",
       payment_method_title: "Cash on delivery",
+      status: "processing",
       date_created_gmt: dateCreatedGmt,
       billing: {
         first_name: customerName,
@@ -50,34 +51,61 @@ async function createOrderWithDate(dateCreatedGmt, customerName) {
   const wpPwB64 = execSync('kubectl get secret -n uai uai-mariadb -o jsonpath="{.data.password}"', { encoding: "utf-8" }).trim();
   const wpPw = Buffer.from(wpPwB64, "base64").toString("utf-8");
 
-  // Update order post_date and post_date_gmt directly in MariaDB to ensure exact timestamp
-  execSync(`kubectl exec -i -n uai uai-mariadb-0 -- mariadb -u wp_user -p${wpPw} -D wordpress -e "UPDATE wp_posts SET post_date = '${dateCreatedGmt.replace('T', ' ').replace('Z', '')}', post_date_gmt = '${dateCreatedGmt.replace('T', ' ').replace('Z', '')}' WHERE ID = ${order.id};"`);
+  // Format GMT date for MariaDB
+  const gmtSqlDate = dateCreatedGmt.replace("T", " ").replace("Z", "");
+  // Calculate local IST date (+5:30)
+  const gmtTime = new Date(dateCreatedGmt).getTime();
+  const localIstDate = new Date(gmtTime + 5.5 * 3600 * 1000).toISOString().replace("T", " ").replace("Z", "").substring(0, 19);
+
+  // Update order post_date and post_date_gmt directly in MariaDB
+  execSync(`kubectl exec -i -n uai uai-mariadb-0 -- mariadb -u wp_user -p${wpPw} -D wordpress -e "UPDATE wp_posts SET post_date = '${localIstDate}', post_date_gmt = '${gmtSqlDate}' WHERE ID = ${order.id};"`);
   
   return order.id;
 }
 
 async function main() {
-  console.log("=== ITEM 4: TIMEZONE HARMONIZATION & MIDNIGHT BOUNDARY TEST ===");
+  console.log("================================================================================");
+  console.log("TASK 10: TIMEZONE HARMONIZATION & ASIA/KOLKATA MIDNIGHT BOUNDARY TEST");
+  console.log("================================================================================");
 
   const wpPwB64 = execSync('kubectl get secret -n uai uai-mariadb -o jsonpath="{.data.password}"', { encoding: "utf-8" }).trim();
   const wpPw = Buffer.from(wpPwB64, "base64").toString("utf-8");
 
   // 1. Check WordPress Timezone
   const wpTz = execSync(
-    `kubectl exec -i -n uai uai-mariadb-0 -- mariadb -u wp_user -p${wpPw} -D wordpress -e "SELECT option_value FROM wp_options WHERE option_name = 'timezone_string';"`,
+    `kubectl exec -i -n uai uai-mariadb-0 -- mariadb -u wp_user -p${wpPw} -D wordpress -N -e "SELECT option_value FROM wp_options WHERE option_name = 'timezone_string';"`,
     { encoding: "utf-8" }
   );
-  console.log(`WordPress configured timezone_string: ${wpTz.trim().split("\n")[1] || "UTC"}`);
+  console.log(`WordPress configured timezone_string: ${wpTz.trim()}`);
+  assert.strictEqual(wpTz.trim(), "Asia/Kolkata", "WordPress timezone must be configured as Asia/Kolkata");
 
-  // 2. Create Order A: 10 seconds BEFORE midnight (2026-10-20 23:59:50 UTC)
-  const orderA_id = await createOrderWithDate("2026-10-20T23:59:50Z", "PreMidnight");
-  console.log(`Created Order A (Just BEFORE midnight): #${orderA_id} @ 2026-10-20T23:59:50Z`);
+  // 2. Compute dynamic IST Midnight Boundary for today
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const todayIst = formatter.format(now); // e.g. "2026-10-25"
+  
+  // Start of today in IST in UTC milliseconds
+  const istMidnightEpoch = new Date(`${todayIst}T00:00:00+05:30`).getTime();
+  const preMidnightIso = new Date(istMidnightEpoch - 10000).toISOString(); // 10s before IST midnight
+  const postMidnightIso = new Date(istMidnightEpoch + 10000).toISOString(); // 10s after IST midnight
 
-  // 3. Create Order B: 10 seconds AFTER midnight (2026-10-21 00:00:10 UTC)
-  const orderB_id = await createOrderWithDate("2026-10-21T00:00:10Z", "PostMidnight");
-  console.log(`Created Order B (Just AFTER midnight): #${orderB_id} @ 2026-10-21T00:00:10Z`);
+  console.log(`Today in Asia/Kolkata:            ${todayIst}`);
+  console.log(`Local IST Midnight in UTC:        ${new Date(istMidnightEpoch).toISOString()}`);
+  console.log(`Order A (10s before IST midnight): ${preMidnightIso}`);
+  console.log(`Order B (10s after IST midnight):  ${postMidnightIso}`);
 
-  // 4. Query Gateway Agent as Admin
+  const orderA_id = await createOrderWithDate(preMidnightIso, "PreMidnightIST");
+  console.log(`Created Order A (Just BEFORE IST midnight): #${orderA_id} @ ${preMidnightIso}`);
+
+  const orderB_id = await createOrderWithDate(postMidnightIso, "PostMidnightIST");
+  console.log(`Created Order B (Just AFTER IST midnight):  #${orderB_id} @ ${postMidnightIso}`);
+
+  // 3. Query Gateway Agent as Admin
   const adminPassword = getAdminPassword();
   const { token } = await login("admin@localtest.me", adminPassword);
 
@@ -115,24 +143,32 @@ async function main() {
     }
   }
 
-  console.log(`Model chose tool args:`, JSON.stringify(toolArgs));
-  console.log(`Agent response preview:`, finalContent.substring(0, 300) + "...\n");
+  console.log(`\nModel chose tool args:`, JSON.stringify(toolArgs));
+  console.log(`Agent response preview:\n${finalContent.substring(0, 350)}...\n`);
 
-  // Verify boundary filtering:
-  // Order B (#orderB_id) MUST be in the response
-  // Order A (#orderA_id) MUST NOT be in the response
-  const includesOrderB = finalContent.includes(String(orderB_id)) || finalContent.includes("PostMidnight");
-  const includesOrderA = finalContent.includes(String(orderA_id)) || finalContent.includes("PreMidnight");
+  assert.ok(toolArgs, "Agent must call woo__list_orders");
+  assert.ok(toolArgs.after, "Agent must supply after parameter for today filter");
 
-  console.log(`Order B (#${orderB_id}, post-midnight) included: ${includesOrderB ? "YES (PASS)" : "NO (FAIL)"}`);
-  console.log(`Order A (#${orderA_id}, pre-midnight) excluded: ${!includesOrderA ? "YES (PASS)" : "NO (FAIL)"}`);
+  const orderAExcluded = !finalContent.includes(String(orderA_id));
+  const orderBIncluded = finalContent.includes(String(orderB_id));
 
-  assert.strictEqual(includesOrderB, true, "Order B created after midnight should be included");
-  assert.strictEqual(includesOrderA, false, "Order A created before midnight should be excluded");
+  console.log("Boundary Assertion Verification:");
+  console.log(`- Order A (#${orderA_id}) from before IST midnight excluded: ${orderAExcluded}`);
+  console.log(`- Order B (#${orderB_id}) from after IST midnight included:  ${orderBIncluded}`);
 
-  console.log("\n========================================================");
-  console.log("ITEM 4 PASSED: Midnight boundary orders correctly handled!");
-  console.log("========================================================");
+  assert.ok(orderAExcluded, `Order A (#${orderA_id}) must be excluded from today's orders`);
+  assert.ok(orderBIncluded, `Order B (#${orderB_id}) must be included in today's orders`);
+
+  // Cleanup test orders
+  execSync(`kubectl exec -i -n uai uai-mariadb-0 -- mariadb -u wp_user -p${wpPw} -D wordpress -e "DELETE FROM wp_posts WHERE ID IN (${orderA_id}, ${orderB_id}); DELETE FROM wp_postmeta WHERE post_id IN (${orderA_id}, ${orderB_id});"`);
+  console.log(`[PASS] Cleaned up temporary boundary orders #${orderA_id} and #${orderB_id}.`);
+
+  console.log("\n================================================================================");
+  console.log("TASK 10 VERDICT: PASS (Asia/Kolkata midnight boundary test verified; Order A excluded, Order B included)");
+  console.log("================================================================================\n");
 }
 
-main().catch(console.error);
+main().catch(err => {
+  console.error("Test failed:", err);
+  process.exit(1);
+});

@@ -48,6 +48,16 @@ async function readSSEStream(url, token, body, onEvent) {
       try {
         const event = JSON.parse(jsonStr);
         events.push(event);
+        if (event.type === "confirmation_required") {
+          fetch(`${GATEWAY_URL}/api/chat/confirm`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ confirmationId: event.confirmationId, action: "approve" }),
+          }).catch(() => {});
+        }
         if (onEvent) onEvent(event);
       } catch (err) {
         // partial chunk

@@ -58,7 +58,18 @@ async function readSSEStream(url, token, body) {
       if (!jsonStr) continue;
 
       try {
-        events.push(JSON.parse(jsonStr));
+        const ev = JSON.parse(jsonStr);
+        events.push(ev);
+        if (ev.type === "confirmation_required") {
+          fetch(`${BASE_URL}/api/chat/confirm`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ confirmationId: ev.confirmationId, action: "approve" }),
+          }).catch(() => {});
+        }
       } catch {}
     }
   }

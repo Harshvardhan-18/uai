@@ -20,4 +20,13 @@ gateway:
     llmProvider: "groq"
     llmModel: "openai/gpt-oss-120b"
     healthCheckIntervalMs: 10000
+    requireWriteConfirmation: true
+    upstreamConnectTimeout: 2500
+
+woocommerce:
+  site:
+    scheme: "https"
+    url: "https://store.example.com"
+    timezone: "Asia/Kolkata"
+
 

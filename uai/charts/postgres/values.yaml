@@ -8,7 +8,7 @@ image:
 auth:
   database: uai_gateway
   username: uai_user
-  password: ""
+  password: "REDACTED_POSTGRES_PASS"
 
 service:
   port: 5432

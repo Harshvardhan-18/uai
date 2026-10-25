@@ -43,6 +43,7 @@ export async function initDb(): Promise<void> {
         health_status VARCHAR(50) DEFAULT 'Unknown',
         health_error TEXT,
         last_health_check TIMESTAMP WITH TIME ZONE,
+        member_access BOOLEAN DEFAULT false,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
@@ -148,6 +149,10 @@ export async function initDb(): Promise<void> {
         console.log(`[db] Seeded initial upstream server: ${s.name} (${s.slug})`);
       }
     }
+
+    // Ensure member_access column exists on servers table
+    await client.query(`ALTER TABLE servers ADD COLUMN IF NOT EXISTS member_access BOOLEAN DEFAULT false;`);
+    await client.query(`UPDATE servers SET member_access = true WHERE slug IN ('woo', 'utils', 'everything') AND member_access IS NOT TRUE;`);
 
     // Migrate any legacy /sse URLs to modern Streamable HTTP /mcp
     await client.query(`UPDATE servers SET url = REPLACE(url, '/sse', '/mcp') WHERE url LIKE '%/sse'`);

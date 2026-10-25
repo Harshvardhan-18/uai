@@ -71,6 +71,10 @@ export function App() {
   useEffect(() => {
     if (user) {
       loadData();
+      const interval = setInterval(() => {
+        loadData();
+      }, 4000); // Live health and server state polling at 4s (<= 5s requirement)
+      return () => clearInterval(interval);
     }
   }, [user]);
 

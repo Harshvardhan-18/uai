@@ -35,5 +35,8 @@ export const config = {
   llmProvider: process.env.LLM_PROVIDER || "auto",
   llmApiKey: process.env.LLM_API_KEY || "",
   llmModel: process.env.LLM_MODEL || "",
+  siteTimezone: process.env.SITE_TIMEZONE || "Asia/Kolkata",
   maxToolSteps: parseInt(process.env.MAX_TOOL_STEPS || "5", 10),
+  upstreamConnectTimeout: parseInt(process.env.UPSTREAM_CONNECT_TIMEOUT || "2500", 10),
+  requireWriteConfirmation: process.env.REQUIRE_WRITE_CONFIRMATION !== "false",
 };

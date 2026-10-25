@@ -3,7 +3,7 @@ replicaCount: 1
 
 image:
   repository: uai-dashboard
-  tag: latest
+  tag: "v7"
   pullPolicy: IfNotPresent
 
 service:

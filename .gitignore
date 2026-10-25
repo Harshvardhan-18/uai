@@ -20,6 +20,11 @@ yarn-error.log*
 .env.*.local
 *.pem
 *.key
+*-backup.yaml
+*backup*.yaml
+*.secret.yaml
+scripts/*backup*.yaml
+scripts/uai-llm-backup.yaml
 
 # Operating System
 .DS_Store

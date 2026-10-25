@@ -21,25 +21,35 @@ export interface ToolDefinition {
   parameters: any;
 }
 
+export interface LLMToolCall {
+  id: string;
+  name: string;
+  arguments: any;
+  parseError?: string;
+  rawArguments?: string;
+}
+
+export interface LLMUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  reasoning_tokens?: number;
+  total_tokens: number;
+}
+
 export interface LLMResponse {
   content: string;
-  tool_calls?: Array<{
-    id: string;
-    name: string;
-    arguments: any;
-  }>;
+  tool_calls?: LLMToolCall[];
+  usage?: LLMUsage;
 }
 
 export interface LLMProvider {
   name: string;
   model: string;
-  chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LLMResponse>;
-}
-
-function redactKey(key: string): string {
-  if (!key) return "<none>";
-  if (key.length <= 8) return "***";
-  return key.substring(0, 4) + "..." + key.substring(key.length - 4);
+  chat(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onRateLimit?: (seconds: number) => void
+  ): Promise<LLMResponse>;
 }
 
 /**
@@ -50,7 +60,11 @@ export class SmartIntentProvider implements LLMProvider {
   name = "smart-intent-fallback";
   model = "smart-intent-fallback";
 
-  async chat(messages: ChatMessage[], _tools: ToolDefinition[]): Promise<LLMResponse> {
+  async chat(
+    messages: ChatMessage[],
+    _tools: ToolDefinition[],
+    _onRateLimit?: (seconds: number) => void
+  ): Promise<LLMResponse> {
     const lastMsg = messages[messages.length - 1];
 
     // 1. If last message was a tool result, synthesize a final answer
@@ -193,7 +207,8 @@ async function fetchWithRetry(
   url: string,
   init: RequestInit,
   providerName: string,
-  maxRetries = 3
+  maxRetries = 3,
+  onRateLimit?: (seconds: number) => void
 ): Promise<Response> {
   let attempt = 0;
   while (attempt < maxRetries) {
@@ -208,7 +223,11 @@ async function fetchWithRetry(
         }
         const retryAfterSec = parseInt(res.headers.get("retry-after") || "0", 10);
         const backoffMs = retryAfterSec > 0 ? retryAfterSec * 1000 : Math.pow(2, attempt) * 1000;
+        const waitSec = Math.ceil(backoffMs / 1000);
         console.log(`[llm-trace] ${providerName} 429/5xx detected. Backing off for ${backoffMs}ms before retry attempt ${attempt + 1}...`);
+        if (onRateLimit) {
+          onRateLimit(waitSec);
+        }
         await new Promise((r) => setTimeout(r, backoffMs));
         continue;
       }
@@ -216,7 +235,11 @@ async function fetchWithRetry(
     } catch (err: any) {
       if (attempt >= maxRetries) throw err;
       const backoffMs = Math.pow(2, attempt) * 1000;
+      const waitSec = Math.ceil(backoffMs / 1000);
       console.warn(`[llm-trace] ${providerName} network error on attempt ${attempt}: ${err.message}. Retrying in ${backoffMs}ms...`);
+      if (onRateLimit) {
+        onRateLimit(waitSec);
+      }
       await new Promise((r) => setTimeout(r, backoffMs));
     }
   }
@@ -236,9 +259,13 @@ export class GeminiProvider implements LLMProvider {
     this.model = model || "gemini-2.5-flash";
   }
 
-  async chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LLMResponse> {
+  async chat(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onRateLimit?: (seconds: number) => void
+  ): Promise<LLMResponse> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
-    console.log(`[llm-trace] Gemini Request -> Model: ${this.model}, Endpoint: https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${redactKey(this.apiKey)} (Tools: ${tools.length})`);
+    console.log(`[llm-trace] Gemini Request -> Model: ${this.model}, Endpoint: https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent (Tools: ${tools.length})`);
 
     // Convert messages to Gemini format
     const contents: any[] = [];
@@ -350,8 +377,16 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.model = model;
   }
 
-  async chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LLMResponse> {
-    console.log(`[llm-trace] ${this.name} Request -> Model: ${this.model}, BaseUrl: ${this.baseUrl}, Key: ${redactKey(this.apiKey)} (Tools: ${tools.length})`);
+  async chat(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onRateLimit?: (seconds: number) => void
+  ): Promise<LLMResponse> {
+    console.log(`[llm-trace] ${this.name} Request -> Model: ${this.model}, BaseUrl: ${this.baseUrl} (Tools: ${tools.length})`);
+    const lastToolMsg = messages.filter((m) => m.role === "tool").pop();
+    if (lastToolMsg) {
+      console.log(`[llm-trace] Tool Result Fed Back -> ${lastToolMsg.name}: ${lastToolMsg.content.substring(0, 150)}`);
+    }
     const formattedTools = tools.map((t) => ({
       type: "function",
       function: {
@@ -373,48 +408,78 @@ export class OpenAICompatibleProvider implements LLMProvider {
           model: this.model,
           messages,
           tools: formattedTools.length > 0 ? formattedTools : undefined,
+          max_tokens: 1024,
         }),
       },
-      this.name
+      this.name,
+      3,
+      onRateLimit
     );
 
     const data = (await res.json()) as any;
     console.log(`[llm-trace] ${this.name} Response -> Status: ${res.status}`);
+
+    let usage: LLMUsage | undefined;
+    if (data.usage) {
+      const reasoning = data.usage.completion_tokens_details?.reasoning_tokens || 0;
+      usage = {
+        prompt_tokens: data.usage.prompt_tokens,
+        completion_tokens: data.usage.completion_tokens,
+        reasoning_tokens: reasoning,
+        total_tokens: data.usage.total_tokens,
+      };
+      console.log(`[llm-trace] Step Usage -> Prompt: ${usage.prompt_tokens}, Reasoning: ${reasoning}, Completion: ${usage.completion_tokens}, Total: ${usage.total_tokens}`);
+    }
+
     const choice = data.choices?.[0]?.message;
     const content = choice?.content || "";
-    const toolCalls = choice?.tool_calls?.map((tc: any) => {
-      let args: any = {};
-      if (typeof tc.function.arguments === "string") {
+    const toolCalls: LLMToolCall[] | undefined = choice?.tool_calls?.map((tc: any) => {
+      let args: any = null;
+      let parseError: string | undefined;
+      const rawArgs = tc.function?.arguments;
+
+      if (typeof rawArgs === "string") {
         try {
-          args = JSON.parse(tc.function.arguments);
+          args = JSON.parse(rawArgs);
         } catch (parseErr: any) {
-          console.warn(`[llm-trace] Malformed tool call arguments string: "${tc.function.arguments}". Attempting sanitization...`);
+          console.warn(`[llm-trace] Malformed tool call arguments string: "${rawArgs}". Attempting sanitization...`);
           try {
-            const cleaned = tc.function.arguments.replace(/,\s*([}\]])/g, "$1");
+            const cleaned = rawArgs.replace(/,\s*([}\]])/g, "$1");
             args = JSON.parse(cleaned);
           } catch {
-            console.warn(`[llm-trace] Sanitization failed, falling back to empty arguments object {}`);
-            args = {};
+            console.warn(`[llm-trace] Sanitization failed permanently, setting parseError.`);
+            args = null;
+            parseError = parseErr.message || "Invalid JSON in arguments";
           }
         }
-      } else if (tc.function.arguments) {
-        args = tc.function.arguments;
+      } else if (rawArgs && typeof rawArgs === "object") {
+        args = rawArgs;
+      } else {
+        args = {};
       }
 
       return {
         id: tc.id,
-        name: tc.function.name,
+        name: tc.function?.name,
         arguments: args,
+        parseError,
+        rawArguments: typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs),
       };
     });
 
     if (toolCalls && toolCalls.length > 0) {
       console.log(`[llm-trace] ${this.name} Tool Calls (${toolCalls.length}) ->`, toolCalls.map((t: any) => t.name).join(", "));
+      for (const tc of toolCalls) {
+        console.log(`[llm-trace] Model Tool Call -> ${tc.name} args: ${JSON.stringify(tc.arguments)}`);
+      }
+    } else {
+      console.log(`[llm-trace] Final Model Response -> ${content.substring(0, 150)}`);
     }
 
     return {
       content,
       tool_calls: toolCalls,
+      usage,
     };
   }
 }

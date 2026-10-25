@@ -11,6 +11,7 @@ cliImage:
   pullPolicy: IfNotPresent
 
 site:
+  scheme: "http"
   url: "http://store.localtest.me"
   title: "UAI Store"
   timezone: "UTC"

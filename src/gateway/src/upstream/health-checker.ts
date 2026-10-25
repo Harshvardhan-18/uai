@@ -39,7 +39,7 @@ export class HealthChecker {
       }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), config.upstreamTimeoutList);
+      const timeout = setTimeout(() => controller.abort(), config.upstreamConnectTimeout);
 
       try {
         const res = await fetch(testUrl, {
@@ -65,11 +65,12 @@ export class HealthChecker {
       const res = await pool.query<UpstreamServer>("SELECT * FROM servers ORDER BY id ASC");
       for (const server of res.rows) {
         const { status, error } = await this.checkServer(server);
+        const recordedError = status === "Connected" ? null : (error ? `[active] ${error}` : null);
         await pool.query(
           `UPDATE servers 
            SET health_status = $1, health_error = $2, last_health_check = NOW()
            WHERE id = $3`,
-          [status, error, server.id]
+          [status, recordedError, server.id]
         );
       }
     } catch (err: any) {

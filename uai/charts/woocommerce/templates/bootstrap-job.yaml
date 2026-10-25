@@ -115,7 +115,7 @@ spec:
                   --dbname="$WORDPRESS_DB_NAME" \
                   --dbuser="$WORDPRESS_DB_USER" \
                   --dbpass="$WORDPRESS_DB_PASSWORD" \
-                  --extra-php="define('FS_METHOD', 'direct'); define('WP_HOME', '$SITE_URL'); define('WP_SITEURL', '$SITE_URL'); if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos(\$_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; } if (isset(\$_SERVER['REQUEST_URI']) && strpos(\$_SERVER['REQUEST_URI'], '/wp-json') !== false) { \$_SERVER['HTTPS'] = 'on'; }"
+                  --extra-php="define('FS_METHOD', 'direct'); define('WP_HOME', '$SITE_URL'); define('WP_SITEURL', '$SITE_URL');{{- if eq .Values.site.scheme "https" }} \$_SERVER['HTTPS'] = 'on';{{- end }}"
               fi
 
               # 4. Install WordPress core if not installed

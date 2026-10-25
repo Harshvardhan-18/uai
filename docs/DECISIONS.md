@@ -274,6 +274,44 @@ Running log of architectural and implementation choices.
 **Decision:** Parameterized `replicas: {{ .Values.replicaCount | default 1 }}` in `uai/charts/gateway/templates/deployment.yaml`. Validated a live upgrade scaling the gateway to 2 replicas (Revision 11) followed by an immediate Helm rollback (Revision 12) returning to Revision 9 cleanly.
 **Why:** Proves that the gateway is stateless, horizontally scalable, and resilient to deployment lifecycles.
 
+---
+
+## Phase 9 — Real LLM Autonomous Loop & Production Hardening
+
+### D-038: Real LLM Tool Loop Integration with OpenAI-Compatible Provider (Groq)
+**Context:** While the deterministic mock agent verified basic wiring, production autonomous agent orchestration requires real LLM reasoning, multi-turn tool calling, and dynamic argument extraction across upstream services.
+**Decision:** Implemented `OpenAICompatibleProvider` in `src/gateway/src/agent/llm-provider.ts` supporting OpenAI-compatible APIs (Groq `openai/gpt-oss-120b`, OpenAI `gpt-4o-mini`).
+- **Configuration Decoupling**: Non-sensitive settings (`LLM_PROVIDER`, `LLM_MODEL`) are managed declaratively in Helm values (`values-local.yaml` / `values-prod.yaml`). Secrets are managed strictly in Kubernetes `Secret uai-llm` (`llm-api-key`).
+- **Backoff & Rate Limiting**: Added exponential backoff and jitter for HTTP 429 and 5xx errors with visible UI notification events (`rate_limit`).
+- **Resilient Fallback**: If the key is missing or calls fail persistently, the gateway safely falls back to the deterministic mock provider and broadcasts an amber warning banner in the dashboard UI.
+**Why:** True production parity with zero secrets in git history, fully declarative configuration, and zero downtime in degraded operational states.
+
+### D-039: Strict Tool Call Parsing and Defensive Guard against Malformed LLM Arguments
+**Context:** Large language models occasionally produce truncated, malformed, or unparseable JSON in tool call arguments. Executing tools with `{}` or guessed fallback values can corrupt upstream databases (e.g. creating unnamed products or zeroed orders).
+**Decision:** Updated `OpenAICompatibleProvider.chat()` and `agent-core.ts` to strictly validate tool arguments:
+- If JSON parsing fails, `arguments` is set to `null`, and the exact parse error is recorded in `parseError`.
+- Write tools are strictly blocked when `parseError` exists or `arguments === null`.
+- The parser error is fed back into the conversation context as a `role: "tool"` message, prompting the model to re-emit valid arguments (up to 2 retries).
+- If retries fail, the loop terminates cleanly with a user-facing explanation.
+**Why:** Prevents accidental or corrupt writes to WooCommerce and upstream microservices.
+
+### D-040: WordPress Timezone Alignment with Agent Start-of-Day Filter
+**Context:** WooCommerce orders store local and UTC timestamps. If the agent's "today" prompt assumes UTC while the store operates in local business hours (e.g., `Asia/Kolkata`), orders placed in evening local hours cross UTC midnight boundaries, leading to missing or misclassified orders.
+**Decision:** 
+- Configured `site.timezone: "Asia/Kolkata"` in `uai/values-local.yaml` and initialized WordPress database option `timezone_string`.
+- Updated the gateway agent system prompt to inject current date, day-of-week, and store timezone (`Asia/Kolkata`).
+- Instructed the model to provide explicit ISO 8601 timestamps with timezone offset (e.g., `after: 2026-10-21T00:00:00+05:30`) to `woo__list_orders`.
+**Why:** Guarantees boundary precision for order queries across local midnight.
+
+### D-041: Graceful Pod Termination, Connection Pool Draining, and Cause-Unwrapped Health Detection
+**Context:** Upstream pod failures previously took up to ~30s to detect because lingering pooled keep-alive HTTP connections masked container termination, and errors like `ECONNREFUSED` were obscured inside nested `undici` error causes.
+**Decision:** 
+- Added graceful SIGTERM handlers (`server.close()`, `process.exit(0)`) to `woo-mcp`, `utils-mcp`, and `everything-mcp`.
+- Reduced `terminationGracePeriodSeconds` to 10s across all upstream MCP deployments.
+- Configured connection pool eviction to drop pooled keep-alive sockets immediately upon transport failure.
+- Updated error mapping in `ssrf-guard.ts` to unwrap `err.cause?.code`, isolating precise network causes (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`, `ECONNRESET`).
+**Why:** Reduced time-to-Unreachable to ~10.9s on plain pod deletions and ~400ms on scale-to-0, well within the 12s SLA.
+
 
 
 

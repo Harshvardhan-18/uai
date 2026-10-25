@@ -24,6 +24,19 @@ spec:
         runAsUser: 33
         runAsGroup: 33
         fsGroup: 33
+      initContainers:
+        - name: init-mu-plugins
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - "mkdir -p /var/www/html/wp-content/mu-plugins && cp /config/uai-auth.php /var/www/html/wp-content/mu-plugins/uai-auth.php"
+          volumeMounts:
+            - name: wp-data
+              mountPath: /var/www/html
+            - name: mu-plugin-config
+              mountPath: /config
       containers:
         - name: wordpress
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -58,11 +71,9 @@ spec:
                 define('FS_METHOD', 'direct');
                 define('WP_HOME', '{{ .Values.site.url }}');
                 define('WP_SITEURL', '{{ .Values.site.url }}');
+                define('UAI_SITE_SCHEME', '{{ .Values.site.scheme | default "http" }}');
                 if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) {
-                  $_SERVER['HTTPS'] = 'on';
-                }
-                if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/wp-json') !== false) {
-                  $_SERVER['HTTPS'] = 'on';
+                    $_SERVER['HTTPS'] = 'on';
                 }
           ports:
             - name: http
@@ -92,3 +103,6 @@ spec:
         - name: wp-data
           persistentVolumeClaim:
             claimName: {{ .Release.Name }}-woocommerce-pvc
+        - name: mu-plugin-config
+          configMap:
+            name: {{ .Release.Name }}-woocommerce-mu-plugins

@@ -14,16 +14,25 @@ interface ToolCallState {
   isError?: boolean;
 }
 
+interface ConfirmationState {
+  id: string;
+  tool: string;
+  args: any;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
 interface MessageItem {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   thought?: string;
+  rateLimit?: string;
   toolCalls?: ToolCallState[];
   isStreaming?: boolean;
   provider?: string;
   model?: string;
   isFallback?: boolean;
+  pendingConfirmation?: ConfirmationState;
 }
 
 interface ChatTabProps {
@@ -62,6 +71,31 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
 
   const toggleToolExpand = (toolKey: string) => {
     setExpandedTools((prev) => ({ ...prev, [toolKey]: !prev[toolKey] }));
+  };
+
+  const handleConfirmation = async (msgId: string, confirmationId: string, action: 'approve' | 'reject') => {
+    try {
+      const token = getToken();
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === msgId && msg.pendingConfirmation
+            ? { ...msg, pendingConfirmation: { ...msg.pendingConfirmation, status: action === 'approve' ? 'approved' : 'rejected' } }
+            : msg
+        )
+      );
+
+      await fetch('/api/chat/confirm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ confirmationId, action }),
+      });
+    } catch (err) {
+      console.error('Failed to submit write confirmation:', err);
+    }
   };
 
   const handleSend = async (textToSend?: string) => {
@@ -135,14 +169,19 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
                   return { ...msg, provider: event.provider, model: event.model, isFallback: event.isFallback };
                 }
 
+                if (event.type === 'rate_limit') {
+                  return { ...msg, rateLimit: event.content, thought: undefined };
+                }
+
                 if (event.type === 'thought') {
-                  return { ...msg, thought: event.content };
+                  return { ...msg, thought: event.content, rateLimit: undefined };
                 }
 
                 if (event.type === 'tool_call_start') {
                   const existingCalls = msg.toolCalls || [];
                   return {
                     ...msg,
+                    rateLimit: undefined,
                     toolCalls: [
                       ...existingCalls,
                       { tool: event.tool, args: event.args },
@@ -157,11 +196,37 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
                     }
                     return tc;
                   });
-                  return { ...msg, toolCalls: updatedCalls };
+                  return { ...msg, toolCalls: updatedCalls, rateLimit: undefined };
+                }
+
+                if (event.type === 'confirmation_required') {
+                  return {
+                    ...msg,
+                    rateLimit: undefined,
+                    pendingConfirmation: {
+                      id: event.confirmationId,
+                      tool: event.tool,
+                      args: event.args,
+                      status: 'pending',
+                    },
+                  };
+                }
+
+                if (event.type === 'confirmation_result') {
+                  return {
+                    ...msg,
+                    rateLimit: undefined,
+                    pendingConfirmation: msg.pendingConfirmation
+                      ? {
+                          ...msg.pendingConfirmation,
+                          status: event.approved ? 'approved' : 'rejected',
+                        }
+                      : undefined,
+                  };
                 }
 
                 if (event.type === 'delta') {
-                  return { ...msg, text: event.content || msg.text, thought: undefined };
+                  return { ...msg, text: event.content || msg.text, thought: undefined, rateLimit: undefined };
                 }
 
                 if (event.type === 'done') {
@@ -173,6 +238,7 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
                     text: event.content || msg.text,
                     isStreaming: false,
                     thought: undefined,
+                    rateLimit: undefined,
                     provider: event.provider,
                     model: event.model,
                     isFallback: event.isFallback,
@@ -263,6 +329,14 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
                       </div>
                     )}
 
+                    {/* Rate Limit Status */}
+                    {m.rateLimit && (
+                      <div className="inline-flex items-center space-x-2 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-300 px-3 py-1.5 rounded-full animate-pulse shadow-xs">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 animate-bounce" />
+                        <span>{m.rateLimit}</span>
+                      </div>
+                    )}
+
                     {/* Tool Calls Display */}
                     {m.toolCalls && m.toolCalls.length > 0 && (
                       <div className="space-y-2 w-full">
@@ -317,6 +391,49 @@ export const ChatTab: React.FC<ChatTabProps> = ({ user, tools }) => {
                             </div>
                           );
                         })}
+                      </div>
+                    )}
+
+                    {/* Write Confirmation Card */}
+                    {m.pendingConfirmation && (
+                      <div className="p-3.5 bg-amber-50/90 border border-amber-200 rounded-xl space-y-2 text-xs shadow-xs">
+                        <div className="flex items-center justify-between font-semibold text-amber-900">
+                          <span className="flex items-center gap-1.5">
+                            <AlertTriangle className="w-4 h-4 text-amber-600" />
+                            Human-in-the-Loop Confirmation Required
+                          </span>
+                          <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold ${
+                            m.pendingConfirmation.status === 'approved'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : m.pendingConfirmation.status === 'rejected'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                              : 'bg-amber-200/80 text-amber-900 border border-amber-300 animate-pulse'
+                          }`}>
+                            {m.pendingConfirmation.status.toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="text-slate-700">
+                          Action: <span className="font-mono font-semibold text-indigo-700">{m.pendingConfirmation.tool}</span>
+                        </div>
+                        <pre className="p-2 bg-slate-900 text-slate-100 rounded text-[11px] overflow-x-auto max-h-32">
+                          {JSON.stringify(m.pendingConfirmation.args, null, 2)}
+                        </pre>
+                        {m.pendingConfirmation.status === 'pending' && (
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              onClick={() => handleConfirmation(m.id, m.pendingConfirmation!.id, 'approve')}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium flex items-center gap-1 text-xs shadow-xs transition-colors"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Approve Action
+                            </button>
+                            <button
+                              onClick={() => handleConfirmation(m.id, m.pendingConfirmation!.id, 'reject')}
+                              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium flex items-center gap-1 text-xs shadow-xs transition-colors"
+                            >
+                              <AlertCircle className="w-3.5 h-3.5" /> Reject Action
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
 

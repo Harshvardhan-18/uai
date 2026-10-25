@@ -18,32 +18,50 @@ function isAllowedInCluster(parsed: URL): boolean {
   return allowedEntries.includes(hostPort);
 }
 
+export function extractErrorCode(err: any): string {
+  if (!err) return "";
+  return (
+    err.cause?.code ||
+    err.code ||
+    err.cause?.cause?.code ||
+    (typeof err.cause === "object" && err.cause !== null ? (err.cause as any).code : "") ||
+    ""
+  ).toUpperCase();
+}
+
 /**
- * Map low-level transport errors to specific root cause messages
+ * Map low-level transport errors to specific root cause messages with unwrapped code
  */
 export function mapTransportError(err: any): string {
   if (!err) return "Unknown error";
+  const unwrappedCode = extractErrorCode(err);
   const msg = (err.message || "").toLowerCase();
   const causeMsg = (err.cause?.message || "").toLowerCase();
-  const code = (err.code || err.cause?.code || "").toLowerCase();
+  const code = unwrappedCode.toLowerCase();
 
-  if (err.name === "AbortError" || msg.includes("aborted") || msg.includes("timed out") || code === "etimedout") {
-    return "Connection timed out (upstream exceeded timeout threshold)";
+  if (err.name === "AbortError" || msg.includes("aborted") || msg.includes("timed out") || code === "etimedout" || code.includes("timeout")) {
+    return unwrappedCode ? `${unwrappedCode}: Connection timed out (upstream exceeded timeout threshold)` : "Connection timed out (upstream exceeded timeout threshold)";
   }
   if (code === "econnrefused" || msg.includes("econnrefused") || causeMsg.includes("econnrefused")) {
-    return "Connection refused (upstream pod down or port not listening)";
+    return unwrappedCode ? `${unwrappedCode}: Connection refused (upstream pod down or port not listening)` : "ECONNREFUSED: Connection refused (upstream pod down or port not listening)";
+  }
+  if (code === "econnreset" || msg.includes("econnreset") || causeMsg.includes("econnreset")) {
+    return unwrappedCode ? `${unwrappedCode}: Connection reset by peer (upstream pod terminated connection)` : "ECONNRESET: Connection reset by peer (upstream pod terminated connection)";
   }
   if (code === "enotfound" || code === "eai_again" || msg.includes("enotfound") || causeMsg.includes("enotfound")) {
-    return "DNS resolution failed (host does not exist)";
+    return unwrappedCode ? `${unwrappedCode}: DNS resolution failed (host does not exist)` : "ENOTFOUND: DNS resolution failed (host does not exist)";
   }
   if (msg.includes("certificate") || msg.includes("tls") || msg.includes("ssl") || code.includes("cert")) {
-    return "TLS/SSL certificate validation failed";
+    return unwrappedCode ? `${unwrappedCode}: TLS/SSL certificate validation failed` : "TLS/SSL certificate validation failed";
   }
   if (msg.includes("ssrf blocked") || msg.includes("ssrf validation failed")) {
     return err.message;
   }
   if (msg.includes("redirect") || causeMsg.includes("redirect") || msg.includes("maximum redirects")) {
     return "HTTP redirect blocked (redirects not permitted on upstream connections)";
+  }
+  if (unwrappedCode) {
+    return `${unwrappedCode}: ${err.cause?.message || err.message}`;
   }
   return err.message || "Connection failed";
 }

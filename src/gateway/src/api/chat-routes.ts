@@ -1,7 +1,7 @@
 import { Router, Response } from "express";
 import { pool } from "../db/index.js";
 import { authenticateRequest, AuthenticatedRequest } from "../auth/auth-service.js";
-import { runAgentLoop, AgentEvent } from "../agent/agent-core.js";
+import { runAgentLoop, AgentEvent, resolveConfirmation } from "../agent/agent-core.js";
 
 export const chatRouter = Router();
 
@@ -90,4 +90,24 @@ chatRouter.get("/history", async (req: AuthenticatedRequest, res: Response): Pro
   } catch (err: any) {
     res.status(500).json({ error: `Failed to fetch chat history: ${err.message}` });
   }
+});
+
+// 3. POST /api/chat/confirm - Human-in-the-loop write confirmation
+chatRouter.post("/confirm", async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = req.user!;
+  const { confirmationId, action, reason } = req.body;
+
+  if (!confirmationId || !action) {
+    res.status(400).json({ error: "confirmationId and action ('approve' | 'reject') are required." });
+    return;
+  }
+
+  const approved = action === "approve";
+  const ok = resolveConfirmation(confirmationId, user.id, approved, reason);
+  if (!ok) {
+    res.status(404).json({ error: "Confirmation not found, expired, or unauthorized." });
+    return;
+  }
+
+  res.json({ success: true, action: approved ? "approved" : "rejected" });
 });

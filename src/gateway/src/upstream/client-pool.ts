@@ -100,7 +100,7 @@ export class UpstreamPool {
     );
 
     try {
-      await this.withTimeout(client.connect(transport), config.upstreamTimeoutList, `Connecting to ${server.name}`);
+      await this.withTimeout(client.connect(transport), config.upstreamConnectTimeout, `Connecting to ${server.name}`);
     } catch (err: any) {
       throw new Error(mapTransportError(err));
     }
@@ -163,11 +163,12 @@ export class UpstreamPool {
         } catch (err: any) {
           // Passive failure detection: immediately mark Unreachable in DB on first failure
           const mappedError = mapTransportError(err);
+          const passiveError = `[passive] ${mappedError}`;
           this.connections.delete(server.slug);
           this.toolCache = null;
           pool.query(
             "UPDATE servers SET health_status = 'Unreachable', health_error = $1, last_health_check = NOW() WHERE id = $2",
-            [mappedError, server.id]
+            [passiveError, server.id]
           ).catch(() => {});
           console.warn(`[pool] Passive failure detected on ${server.name} (${server.slug}): ${mappedError}`);
           throw err;
@@ -249,11 +250,12 @@ export class UpstreamPool {
     } catch (err: any) {
       // Passive failure detection: immediately mark Unreachable in DB on first tool call failure
       const mappedError = mapTransportError(err);
+      const passiveError = `[passive] ${mappedError}`;
       this.connections.delete(serverSlug);
       this.toolCache = null;
       pool.query(
         "UPDATE servers SET health_status = 'Unreachable', health_error = $1, last_health_check = NOW() WHERE id = $2",
-        [mappedError, server.id]
+        [passiveError, server.id]
       ).catch(() => {});
       console.warn(`[pool] Passive failure detected on tool call ${namespacedName}: ${mappedError}`);
       throw new Error(mappedError);

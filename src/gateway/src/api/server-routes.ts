@@ -5,7 +5,7 @@ import { authenticateRequest, requireAdmin, AuthenticatedRequest } from "../auth
 import { upstreamPool } from "../upstream/client-pool.js";
 import { healthChecker } from "../upstream/health-checker.js";
 import { UpstreamServer } from "../types/index.js";
-import { canUserAccessTool } from "../auth/permissions.js";
+import { canUserAccessTool, setMemberAllowedServers, allowServerForMembers, disallowServerForMembers } from "../auth/permissions.js";
 import { validateUpstreamUrl } from "../crypto/ssrf-guard.js";
 
 export const serverRouter = Router();
@@ -13,11 +13,20 @@ export const serverRouter = Router();
 // Apply auth to all server routes
 serverRouter.use(authenticateRequest);
 
+// Helper to keep memberAllowedServerSlugs in sync with DB
+async function syncMemberAllowedServers(): Promise<void> {
+  try {
+    const res = await pool.query<{ slug: string }>("SELECT slug FROM servers WHERE member_access = true AND enabled = true");
+    setMemberAllowedServers(res.rows.map((r) => r.slug));
+  } catch {}
+}
+
 // 1. GET /api/servers - List all upstream servers (credentials stripped)
 serverRouter.get("/", async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  await syncMemberAllowedServers();
   const result = await pool.query<UpstreamServer>(`
     SELECT id, name, slug, url, auth_type, auth_header_name, enabled,
-           health_status, health_error, last_health_check, created_at, updated_at
+           health_status, health_error, last_health_check, member_access, created_at, updated_at
     FROM servers
     ORDER BY id ASC
   `);
@@ -27,6 +36,7 @@ serverRouter.get("/", async (_req: AuthenticatedRequest, res: Response): Promise
 // 2. GET /api/servers/tools - List all aggregated tools currently available (role-filtered)
 serverRouter.get("/tools", async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    await syncMemberAllowedServers();
     const user = req.user!;
     const tools = await upstreamPool.listAggregatedTools();
     const visibleTools = tools.filter((t) => canUserAccessTool(user, t.name));
@@ -36,9 +46,9 @@ serverRouter.get("/tools", async (req: AuthenticatedRequest, res: Response): Pro
   }
 });
 
-// 3. POST /api/servers - Add a new upstream server (admin only, SSRF guarded)
+// 3. POST /api/servers - Add a new upstream server (admin only, SSRF guarded, defaults to admin-only)
 serverRouter.post("/", requireAdmin, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const { name, slug, url, auth_type = "none", auth_token, auth_header_name } = req.body;
+  const { name, slug, url, auth_type = "none", auth_token, auth_header_name, member_access = false } = req.body;
 
   if (!name || !slug || !url) {
     res.status(400).json({ error: "name, slug, and url are required" });
@@ -64,11 +74,17 @@ serverRouter.post("/", requireAdmin, async (req: AuthenticatedRequest, res: Resp
 
   try {
     const result = await pool.query(
-      `INSERT INTO servers (name, slug, url, auth_type, auth_token_encrypted, auth_header_name, enabled)
-       VALUES ($1, $2, $3, $4, $5, $6, true)
-       RETURNING id, name, slug, url, auth_type, auth_header_name, enabled, health_status, created_at`,
-      [name, cleanSlug, url, auth_type, encryptedToken, auth_header_name || null]
+      `INSERT INTO servers (name, slug, url, auth_type, auth_token_encrypted, auth_header_name, member_access, enabled)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+       RETURNING id, name, slug, url, auth_type, auth_header_name, member_access, enabled, health_status, created_at`,
+      [name, cleanSlug, url, auth_type, encryptedToken, auth_header_name || null, member_access === true]
     );
+
+    if (member_access === true) {
+      allowServerForMembers(cleanSlug);
+    } else {
+      disallowServerForMembers(cleanSlug);
+    }
 
     upstreamPool.invalidateCache();
     // Run immediate health check in background
@@ -155,7 +171,40 @@ serverRouter.post("/:id/toggle", requireAdmin, async (req: AuthenticatedRequest,
   }
 });
 
-// 6. DELETE /api/servers/:id - Delete an upstream server (admin only)
+// 6. PATCH /api/servers/:id/permissions - Allow or restrict member access to server's tools (admin only)
+serverRouter.patch("/:id/permissions", requireAdmin, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const id = parseInt(req.params.id as string, 10);
+  const { member_access } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE servers 
+       SET member_access = $1, updated_at = NOW() 
+       WHERE id = $2 
+       RETURNING id, name, slug, member_access, enabled`,
+      [member_access === true, id]
+    );
+
+    if (result.rowCount === 0) {
+      res.status(404).json({ error: "Server not found" });
+      return;
+    }
+
+    const row = result.rows[0];
+    if (row.member_access) {
+      allowServerForMembers(row.slug);
+    } else {
+      disallowServerForMembers(row.slug);
+    }
+
+    upstreamPool.invalidateCache();
+    res.json({ server: row });
+  } catch (err: any) {
+    res.status(500).json({ error: `Failed to update permissions: ${err.message}` });
+  }
+});
+
+// 7. DELETE /api/servers/:id - Delete an upstream server (admin only)
 serverRouter.delete("/:id", requireAdmin, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const id = parseInt(req.params.id as string, 10);
   try {
@@ -165,6 +214,8 @@ serverRouter.delete("/:id", requireAdmin, async (req: AuthenticatedRequest, res:
       return;
     }
 
+    const slug = result.rows[0].slug;
+    disallowServerForMembers(slug);
     upstreamPool.invalidateCache();
     res.json({ message: "Server removed successfully" });
   } catch (err: any) {

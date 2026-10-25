@@ -102,10 +102,21 @@ async function main() {
     await sleep(100);
   }
 
+  let detectorA = "unknown";
+  let cleanReasonA = downReasonA;
+  if (downReasonA.startsWith("[passive]")) {
+    detectorA = "passive";
+    cleanReasonA = downReasonA.replace("[passive] ", "");
+  } else if (downReasonA.startsWith("[active]")) {
+    detectorA = "active";
+    cleanReasonA = downReasonA.replace("[active] ", "");
+  }
+
   console.log(`[DELETE-POD DOWN RESULT]:`);
   console.log(`  Health Status:       ${detectedDownA ? "Unreachable" : "Missed"}`);
-  console.log(`  Failure Reason:      ${downReasonA}`);
-  console.log(`  Time-to-Unreachable: ${timeToDownA}ms (Passive detection caught on first failed tool call)`);
+  console.log(`  Detector Fired:      ${detectorA}`);
+  console.log(`  Failure Reason:      ${cleanReasonA}`);
+  console.log(`  Time-to-Unreachable: ${timeToDownA}ms`);
 
   // Wait for recovery
   console.log("Waiting for new pod to become ready and health checker to flip back to Connected...");
@@ -152,9 +163,20 @@ async function main() {
     await sleep(500);
   }
 
+  let detectorB = "unknown";
+  let cleanReasonB = downReasonB;
+  if (downReasonB.startsWith("[passive]")) {
+    detectorB = "passive";
+    cleanReasonB = downReasonB.replace("[passive] ", "");
+  } else if (downReasonB.startsWith("[active]")) {
+    detectorB = "active";
+    cleanReasonB = downReasonB.replace("[active] ", "");
+  }
+
   console.log(`[SCALE-TO-0 DOWN RESULT]:`);
   console.log(`  Health Status:       ${detectedDownB ? "Unreachable" : "Missed"}`);
-  console.log(`  Failure Reason:      ${downReasonB}`);
+  console.log(`  Detector Fired:      ${detectorB}`);
+  console.log(`  Failure Reason:      ${cleanReasonB}`);
   console.log(`  Time-to-Unreachable: ${timeToDownB}ms`);
 
   // Restore

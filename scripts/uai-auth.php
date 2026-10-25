@@ -1,0 +1,70 @@
+<?php
+/**
+ * Plugin Name: UAI WooCommerce HTTP Auth Helper
+ * Description: Enables WooCommerce REST API authentication over plain HTTP for local development and testing.
+ */
+
+// If HTTPS scheme is configured or connection is already SSL, disable helper completely (native Woo auth applies)
+if ((defined('UAI_SITE_SCHEME') && UAI_SITE_SCHEME === 'https') || (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on')) {
+    return;
+}
+
+add_filter('determine_current_user', function ($user_id) {
+    // If a user is already authenticated by WordPress core, do not override
+    if (!empty($user_id)) {
+        return $user_id;
+    }
+
+    // Only handle WooCommerce REST API v3 routes
+    if (empty($_SERVER['REQUEST_URI']) || strpos($_SERVER['REQUEST_URI'], '/wp-json/wc/v3') === false) {
+        return $user_id;
+    }
+
+    // If native SSL is present, leave authentication to WooCommerce core
+    if (function_exists('is_ssl') && is_ssl()) {
+        return $user_id;
+    }
+
+    $consumer_key = '';
+    $consumer_secret = '';
+
+    if (!empty($_GET['consumer_key']) && !empty($_GET['consumer_secret'])) {
+        $consumer_key = $_GET['consumer_key'];
+        $consumer_secret = $_GET['consumer_secret'];
+    } elseif (!empty($_SERVER['PHP_AUTH_USER']) && !empty($_SERVER['PHP_AUTH_PW'])) {
+        $consumer_key = $_SERVER['PHP_AUTH_USER'];
+        $consumer_secret = $_SERVER['PHP_AUTH_PW'];
+    } elseif (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+        if (strpos(strtolower($_SERVER['HTTP_AUTHORIZATION']), 'basic ') === 0) {
+            $auth = base64_decode(substr($_SERVER['HTTP_AUTHORIZATION'], 6));
+            if (strpos($auth, ':') !== false) {
+                list($consumer_key, $consumer_secret) = explode(':', $auth, 2);
+            }
+        }
+    }
+
+    if (empty($consumer_key) || empty($consumer_secret)) {
+        return $user_id;
+    }
+
+    global $wpdb;
+    // Compute HMAC-SHA256 hash of the consumer key as expected by WooCommerce wc_api_hash
+    $key_hash = hash_hmac('sha256', $consumer_key, 'wc-api');
+
+    // Retrieve API key row by truncated key or hash to perform constant-time comparisons
+    $key_row = $wpdb->get_row($wpdb->prepare(
+        "SELECT key_id, user_id, consumer_key, consumer_secret, permissions FROM {$wpdb->prefix}woocommerce_api_keys WHERE consumer_key = %s",
+        $key_hash
+    ));
+
+    if (!$key_row) {
+        return $user_id;
+    }
+
+    // Constant-time comparison against stored consumer-key hash and consumer-secret
+    if (hash_equals($key_row->consumer_key, $key_hash) && hash_equals($key_row->consumer_secret, $consumer_secret)) {
+        return (int) $key_row->user_id;
+    }
+
+    return $user_id;
+}, 10);

@@ -130,6 +130,11 @@ export const ServersTab: React.FC<ServersTabProps> = ({
         </div>
 
         <div className="flex items-center space-x-3">
+          <div className="hidden sm:inline-flex items-center px-2.5 py-1.5 rounded-full text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-1.5"></span>
+            Auto-polling: 4s
+          </div>
+
           <button
             onClick={handleRefresh}
             disabled={refreshing}
@@ -225,6 +230,15 @@ export const ServersTab: React.FC<ServersTabProps> = ({
                           {server.auth_type === 'bearer' ? 'Bearer Auth' : server.auth_header_name}
                         </span>
                       )}
+                      {server.member_access ? (
+                        <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                          Members: Allowed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
+                          Admin Only
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center space-x-2 mt-1 text-xs text-slate-500 font-mono">
                       <span>{server.url}</span>
@@ -273,6 +287,31 @@ export const ServersTab: React.FC<ServersTabProps> = ({
 
                   {user.role === 'admin' && (
                     <>
+                      <button
+                        onClick={async () => {
+                          const token = localStorage.getItem('uai_token');
+                          await fetch(`/api/servers/${server.id}/permissions`, {
+                            method: 'PATCH',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                            },
+                            credentials: 'include',
+                            body: JSON.stringify({ member_access: !server.member_access }),
+                          });
+                          await onRefresh();
+                        }}
+                        title={server.member_access ? 'Restrict to Admin only' : 'Allow Member access'}
+                        className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors flex items-center gap-1 ${
+                          server.member_access
+                            ? 'text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100'
+                            : 'text-purple-700 bg-purple-50 border-purple-200 hover:bg-purple-100'
+                        }`}
+                      >
+                        <Shield className="w-3.5 h-3.5" />
+                        {server.member_access ? 'Member Access' : 'Admin Only'}
+                      </button>
+
                       <button
                         onClick={() => onToggleServer(server.id)}
                         title={server.enabled ? 'Disable Server' : 'Enable Server'}

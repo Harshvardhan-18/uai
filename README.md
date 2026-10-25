@@ -87,7 +87,23 @@ docker build -t uai-dashboard:latest src/dashboard
 kind load docker-image uai-woo-mcp:latest uai-utils-mcp:latest uai-everything-mcp:latest uai-gateway:latest uai-dashboard:latest --name uai
 ```
 
-### 4. Deploy Platform via Helm
+### 4. Configure LLM Provider & Secret Management
+The autonomous chat agent supports real OpenAI-compatible LLM providers (e.g. Groq, OpenAI). Non-secret provider parameters are configured declaratively in Helm values (`values-local.yaml` / `values-prod.yaml`), while API keys reside strictly inside Kubernetes Secrets:
+
+```bash
+# Create the LLM secret in the uai namespace (only the key is stored in the secret; never in git)
+kubectl -n uai create secret generic uai-llm --from-literal=llm-api-key=YOUR_GROQ_OR_OPENAI_KEY
+```
+
+Configure non-sensitive provider and model identifiers in `uai/values-local.yaml`:
+```yaml
+gateway:
+  env:
+    llmProvider: "groq"
+    llmModel: "openai/gpt-oss-120b"
+```
+
+### 5. Deploy Platform via Helm
 ```bash
 helm install uai ./uai -f ./uai/values-local.yaml -n uai --create-namespace
 ```
@@ -166,9 +182,15 @@ npx @modelcontextprotocol/inspector http://app.localtest.me/mcp \
 2. Sign in with the **Quick Demo Fill** (`admin@localtest.me`).
 3. Navigate to the **Chat Agent** tab.
 4. Try sample instructions:
-   - `"create a product Wireless Mechanical Keyboard at 499"`: The agent analyzes your instruction, triggers `woo__create_product`, publishes the product to the store catalog, and provides the live link.
-   - `"what orders came in today"`: The agent calls `woo__list_orders` and summarizes all customer orders and totals.
-   - `"get today's orders, then convert the total to EUR"`: Demonstrates multi-server orchestration (`woo__list_orders` + `utils__convert_currency`).
+   - `"create a product Wireless Mechanical Keyboard at 499"`: The agent analyzes your instruction, triggers `woo__create_product`, publishes the product to the store catalog, and provides the live link (`http://store.localtest.me/product/...`).
+   - `"what orders came in today"`: The agent analyzes the store's configured timezone (`Asia/Kolkata`), calls `woo__list_orders` with the precise start-of-day boundary (`after: 2026-10-21T00:00:00+05:30`), and summarizes all customer orders and totals.
+   - `"get today's orders, then convert the total to EUR"`: Demonstrates real multi-turn sequential tool orchestration (`woo__list_orders` -> extracts total -> passes argument to `utils__convert_currency`).
+
+### Resilience, Rate Limiting & Fallback Amber Banner
+- **Automated Retry & Backoff**: Upstream provider HTTP 429 (rate limit) or 5xx errors trigger automatic exponential backoff (up to 3 retries) with a visible real-time notification (`⏳ Rate limited by upstream provider, retrying in Ns...`) broadcast to the UI.
+- **Strict Argument Validation**: If an LLM returns malformed or unparseable JSON arguments, write tools are never executed with `{}` or guessed inputs; the error is fed back to the model for correction (up to 2 retries).
+- **Amber Fallback Banner**: If the LLM provider key is missing, invalid, or fails persistently across retries, the agent safely switches to the local deterministic mock fallback model to maintain platform availability. The dashboard chat UI renders an amber warning banner:
+  > **⚠️ Fallback Model Active** — Live LLM is currently unreachable. Autonomous tool execution is operating in mock fallback mode. Verify your `uai-llm` secret.
 
 ---
 

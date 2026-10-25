@@ -14,6 +14,10 @@ mariadb:
 
 woocommerce:
   enabled: true
+  site:
+    scheme: "http"
+    url: "http://store.localtest.me"
+    timezone: "UTC"
 
 postgres:
   enabled: true
@@ -27,6 +31,8 @@ gateway:
     llmProvider: "groq"
     llmModel: "openai/gpt-oss-120b"
     healthCheckIntervalMs: 10000
+    requireWriteConfirmation: true
+    upstreamConnectTimeout: 2500
 
 
 dashboard:

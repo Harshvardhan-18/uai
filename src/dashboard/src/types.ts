@@ -16,6 +16,7 @@ export interface UpstreamServer {
   health_status: 'Connected' | 'Unreachable' | 'Disabled';
   health_error?: string | null;
   last_health_check?: string | null;
+  member_access?: boolean;
   created_at: string;
   updated_at?: string | null;
 }
@@ -43,7 +44,7 @@ export interface AuditLogItem {
   server_slug: string;
   tool_name: string;
   duration_ms: number;
-  outcome: 'success' | 'error' | 'timeout';
+  outcome: 'success' | 'error' | 'timeout' | 'rejected';
   error_message?: string | null;
   request_args_sanitized?: any;
   created_at: string;
